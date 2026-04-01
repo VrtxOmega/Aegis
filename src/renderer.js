@@ -1,0 +1,3493 @@
+/**
+ * Aegis — Renderer
+ * Tab switching + data fetchers + interactive system controls
+ */
+document.addEventListener('DOMContentLoaded', () => {
+    const aegis = window.aegis;
+
+    // ═══════════════════════════════════════════
+    // TAB SWITCHING
+    // ═══════════════════════════════════════════
+    const tabBtns = document.querySelectorAll('.tab-btn');
+    const tabContents = document.querySelectorAll('.tab-content');
+
+    function switchTab(tabId) {
+        tabBtns.forEach(b => b.classList.remove('active'));
+        tabContents.forEach(tc => tc.classList.remove('active'));
+        const btn = document.querySelector(`.tab-btn[data-tab="${tabId}"]`);
+        if (btn) btn.classList.add('active');
+        const content = document.getElementById('tab-' + tabId);
+        if (content) content.classList.add('active');
+        activeTab = tabId;
+        restartPolling();
+    }
+
+    tabBtns.forEach(btn => {
+        btn.addEventListener('click', () => switchTab(btn.dataset.tab));
+    });
+
+    // ═══════════════════════════════════════════
+    // HELPERS
+    // ═══════════════════════════════════════════
+    function formatBytes(bytes) {
+        if (bytes >= 1e9) return (bytes / 1e9).toFixed(1) + ' GB';
+        if (bytes >= 1e6) return (bytes / 1e6).toFixed(1) + ' MB';
+        if (bytes >= 1e3) return (bytes / 1e3).toFixed(1) + ' KB';
+        return bytes + ' B';
+    }
+
+    function setBar(barId, percent) {
+        const bar = document.getElementById(barId);
+        if (bar) {
+            bar.style.width = Math.min(100, percent) + '%';
+            bar.className = 'progress-bar-fill';
+            if (percent >= 85) bar.classList.add('bar-critical');
+            else if (percent >= 60) bar.classList.add('bar-warning');
+        }
+    }
+
+    // Custom confirm modal — replaces native confirm()
+    // Returns a Promise that resolves true/false
+    function aegisConfirm({ title, bodyHtml, icon, danger, okText }) {
+        return new Promise(resolve => {
+            const overlay = document.getElementById('aegis-confirm-overlay');
+            const modal = overlay.querySelector('.aegis-confirm-modal');
+            const iconEl = document.getElementById('aegis-confirm-icon');
+            const titleEl = document.getElementById('aegis-confirm-title');
+            const bodyEl = document.getElementById('aegis-confirm-body');
+            const okBtn = document.getElementById('aegis-confirm-ok');
+            const cancelBtn = document.getElementById('aegis-confirm-cancel');
+
+            iconEl.textContent = icon || '⬡';
+            titleEl.textContent = title || 'Confirm Action';
+            bodyEl.innerHTML = bodyHtml || '';
+            modal.classList.toggle('danger', !!danger);
+            okBtn.textContent = okText || (danger ? 'Kill Process' : 'Confirm');
+
+            overlay.classList.add('open');
+
+            function cleanup(result) {
+                overlay.classList.remove('open');
+                okBtn.removeEventListener('click', onOk);
+                cancelBtn.removeEventListener('click', onCancel);
+                overlayClick && overlay.removeEventListener('click', overlayClick);
+                resolve(result);
+            }
+
+            function onOk() { cleanup(true); }
+            function onCancel() { cleanup(false); }
+            function overlayClick(e) { if (e.target === overlay) cleanup(false); }
+
+            okBtn.addEventListener('click', onOk);
+            cancelBtn.addEventListener('click', onCancel);
+            overlay.addEventListener('click', overlayClick);
+        });
+    }
+
+    // ═══════════════════════════════════════════
+    // INTERACTIVE CLICK HANDLERS
+    // ═══════════════════════════════════════════
+    document.addEventListener('click', (e) => {
+        const clickable = e.target.closest('[data-action]');
+        if (!clickable) return;
+
+        const action = clickable.dataset.action;
+        switch (action) {
+            case 'open-task-manager':
+                aegis.openTaskManager();
+                break;
+            case 'goto-hardware-gpu':
+                switchTab('hardware');
+                break;
+            case 'goto-hardware-battery':
+                switchTab('hardware');
+                break;
+            case 'goto-security':
+                switchTab('security');
+                break;
+            case 'open-settings-battery':
+                aegis.openSettings('battery');
+                break;
+            case 'open-settings-storage':
+                aegis.openSettings('storage');
+                break;
+            case 'open-disk-cleanup':
+                aegis.openSettings('storage');
+                break;
+        }
+    });
+
+    // ═══════════════════════════════════════════
+    // WEATHER LOCATION
+    // ═══════════════════════════════════════════
+    let weatherLocation = localStorage.getItem('aegis-weather-location') || 'Bethalto,IL';
+
+    const weatherEditBtn = document.getElementById('weather-edit-btn');
+    if (weatherEditBtn) {
+        weatherEditBtn.addEventListener('click', () => {
+            const loc = prompt('Enter city name (e.g. "Chicago, IL" or "London"):', weatherLocation);
+            if (loc && loc.trim()) {
+                weatherLocation = loc.trim();
+                localStorage.setItem('aegis-weather-location', weatherLocation);
+                document.getElementById('weather-title').textContent = `Weather — ${weatherLocation}`;
+                updateWeather();
+            }
+        });
+    }
+
+    // ═══════════════════════════════════════════
+    // OVERVIEW TAB
+    // ═══════════════════════════════════════════
+
+    // --- Snapshot Age Tracker ---
+    const panelTimestamps = {};
+    function stampPanel(panelId) {
+        panelTimestamps[panelId] = Date.now();
+    }
+    function updateSnapshotAges() {
+        const now = Date.now();
+        document.querySelectorAll('.snapshot-age').forEach(el => {
+            const panelId = el.dataset.for;
+            const ts = panelTimestamps[panelId];
+            if (ts) {
+                const ago = ((now - ts) / 1000).toFixed(1);
+                el.textContent = `Snapshot: ${ago}s ago`;
+            }
+        });
+    }
+    setInterval(updateSnapshotAges, 500);
+
+    // --- Sparkline History ---
+    const SPARK_MAX = 60;
+    const cpuHistory = [];
+    const ramHistory = [];
+    const WARN_THRESH = 60;
+    const CRIT_THRESH = 85;
+
+    function drawSparkline() {
+        const canvas = document.getElementById('cpu-sparkline');
+        if (!canvas) return;
+        const ctx = canvas.getContext('2d');
+        const dpr = window.devicePixelRatio || 1;
+        const rect = canvas.getBoundingClientRect();
+        canvas.width = rect.width * dpr;
+        canvas.height = rect.height * dpr;
+        ctx.scale(dpr, dpr);
+        const W = rect.width;
+        const H = rect.height;
+
+        ctx.clearRect(0, 0, W, H);
+
+        // --- Danger zones (filled bands) ---
+        // Critical zone: 85-100%
+        const critTop = H - (CRIT_THRESH / 100) * H;
+        ctx.fillStyle = 'rgba(224, 85, 85, 0.06)';
+        ctx.fillRect(0, 0, W, critTop);
+
+        // Warning zone: 60-85%
+        const warnTop = H - (WARN_THRESH / 100) * H;
+        ctx.fillStyle = 'rgba(224, 160, 64, 0.04)';
+        ctx.fillRect(0, critTop, W, warnTop - critTop);
+
+        // Threshold lines
+        ctx.setLineDash([4, 4]);
+        ctx.lineWidth = 1;
+        // 85% critical line
+        ctx.strokeStyle = 'rgba(240, 68, 68, 0.3)';
+        ctx.beginPath(); ctx.moveTo(0, critTop); ctx.lineTo(W, critTop); ctx.stroke();
+        // 60% warning line
+        ctx.strokeStyle = 'rgba(240, 160, 48, 0.25)';
+        ctx.beginPath(); ctx.moveTo(0, warnTop); ctx.lineTo(W, warnTop); ctx.stroke();
+        ctx.setLineDash([]);
+
+        // Threshold labels (right-aligned, subtle)
+        ctx.font = '9px Inter, sans-serif';
+        ctx.textAlign = 'right';
+        ctx.fillStyle = 'rgba(240, 68, 68, 0.35)';
+        ctx.fillText('85%', W - 4, critTop - 3);
+        ctx.fillStyle = 'rgba(240, 160, 48, 0.30)';
+        ctx.fillText('60%', W - 4, warnTop - 3);
+
+        // Grid lines at 25%, 50%, 75%
+        ctx.strokeStyle = 'rgba(255,255,255,0.04)';
+        ctx.lineWidth = 1;
+        [0.25, 0.5, 0.75].forEach(pct => {
+            const y = H - (pct * H);
+            ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke();
+        });
+
+        function drawSmoothLine(data, color, alpha) {
+            if (data.length < 2) return;
+            const step = W / (SPARK_MAX - 1);
+            const points = data.map((v, i) => ({ x: i * step, y: H - (v / 100) * H }));
+
+            // Fill with smooth curve
+            ctx.beginPath();
+            ctx.moveTo(points[0].x, H);
+            ctx.lineTo(points[0].x, points[0].y);
+            for (let i = 1; i < points.length; i++) {
+                const cp = (points[i].x + points[i-1].x) / 2;
+                ctx.quadraticCurveTo(points[i-1].x + (cp - points[i-1].x) * 0.8, points[i-1].y,
+                                     cp, (points[i-1].y + points[i].y) / 2);
+                ctx.quadraticCurveTo(points[i].x - (points[i].x - cp) * 0.8, points[i].y,
+                                     points[i].x, points[i].y);
+            }
+            ctx.lineTo(points[points.length - 1].x, H);
+            ctx.closePath();
+            ctx.fillStyle = color.replace('1)', alpha + ')');
+            ctx.fill();
+
+            // Stroke smooth curve
+            ctx.beginPath();
+            ctx.moveTo(points[0].x, points[0].y);
+            for (let i = 1; i < points.length; i++) {
+                const cp = (points[i].x + points[i-1].x) / 2;
+                ctx.quadraticCurveTo(points[i-1].x + (cp - points[i-1].x) * 0.8, points[i-1].y,
+                                     cp, (points[i-1].y + points[i].y) / 2);
+                ctx.quadraticCurveTo(points[i].x - (points[i].x - cp) * 0.8, points[i].y,
+                                     points[i].x, points[i].y);
+            }
+            ctx.strokeStyle = color;
+            ctx.lineWidth = 1.5;
+            ctx.stroke();
+
+            // Spike markers — dot on any value > CRIT_THRESH
+            data.forEach((v, i) => {
+                if (v >= CRIT_THRESH) {
+                    const x = i * step;
+                    const y = H - (v / 100) * H;
+                    ctx.beginPath();
+                    ctx.arc(x, y, 2.5, 0, Math.PI * 2);
+                    ctx.fillStyle = 'rgba(224, 85, 85, 0.9)';
+                    ctx.fill();
+                }
+            });
+        }
+
+        drawSmoothLine(cpuHistory, 'rgba(240, 192, 64, 1)', 0.08);
+        drawSmoothLine(ramHistory, 'rgba(85, 136, 221, 1)', 0.06);
+    }
+
+    // --- Network throughput tracker ---
+    let lastNetSnapshot = null;
+    let lastNetTime = 0;
+    const NET_HIST_MAX = 30;
+    const netUpHistory = [];
+    const netDownHistory = [];
+
+    async function updateNetworkThroughput() {
+        try {
+            const data = await aegis.get('/api/security/network');
+            if (data.error) return;
+            const now = Date.now();
+
+            if (lastNetSnapshot && lastNetTime) {
+                const dt = (now - lastNetTime) / 1000;
+                if (dt > 0) {
+                    const upBytes = Math.max(0, data.bytes_sent - lastNetSnapshot.bytes_sent) / dt;
+                    const downBytes = Math.max(0, data.bytes_recv - lastNetSnapshot.bytes_recv) / dt;
+
+                    // Track history
+                    netUpHistory.push(upBytes);
+                    netDownHistory.push(downBytes);
+                    if (netUpHistory.length > NET_HIST_MAX) netUpHistory.shift();
+                    if (netDownHistory.length > NET_HIST_MAX) netDownHistory.shift();
+
+                    // Spike detection: current > 3x rolling average
+                    const avgDown = netDownHistory.reduce((a, b) => a + b, 0) / netDownHistory.length;
+                    const avgUp = netUpHistory.reduce((a, b) => a + b, 0) / netUpHistory.length;
+                    const spikeThreshold = 3;
+                    const downSpike = downBytes > avgDown * spikeThreshold && netDownHistory.length > 3;
+                    const upSpike = upBytes > avgUp * spikeThreshold && netUpHistory.length > 3;
+
+                    const el = (id, val) => { const e = document.getElementById(id); if (e) e.textContent = val; };
+                    el('net-up-speed', formatSpeed(upBytes) + (upSpike ? ' ⚡' : ''));
+                    el('net-down-speed', formatSpeed(downBytes) + (downSpike ? ' ⚡' : ''));
+                    el('net-total-sent', formatBytes(data.bytes_sent));
+                    el('net-total-recv', formatBytes(data.bytes_recv));
+
+                    // Spike indicator
+                    const spikeEl = document.getElementById('net-spike-indicator');
+                    if (spikeEl) {
+                        if (downSpike || upSpike) {
+                            spikeEl.textContent = '⚡ SPIKE DETECTED';
+                            spikeEl.classList.add('active');
+                        } else {
+                            spikeEl.textContent = 'Normal traffic';
+                            spikeEl.classList.remove('active');
+                        }
+                    }
+
+                    // Draw mini sparkline
+                    drawNetSparkline();
+                }
+            }
+            lastNetSnapshot = { bytes_sent: data.bytes_sent, bytes_recv: data.bytes_recv };
+            lastNetTime = now;
+            stampPanel('network-speed');
+        } catch (e) { console.warn('net throughput:', e); }
+    }
+
+    function drawNetSparkline() {
+        const canvas = document.getElementById('net-sparkline');
+        if (!canvas) return;
+        const ctx = canvas.getContext('2d');
+        const dpr = window.devicePixelRatio || 1;
+        const rect = canvas.getBoundingClientRect();
+        canvas.width = rect.width * dpr;
+        canvas.height = rect.height * dpr;
+        ctx.scale(dpr, dpr);
+        const W = rect.width;
+        const H = rect.height;
+        ctx.clearRect(0, 0, W, H);
+
+        function drawMini(data, color) {
+            if (data.length < 2) return;
+            const maxVal = Math.max(...data, 1);
+            const step = W / (NET_HIST_MAX - 1);
+            ctx.beginPath();
+            data.forEach((v, i) => {
+                const x = i * step;
+                const y = H - (v / maxVal) * H * 0.9;
+                if (i === 0) ctx.moveTo(x, y);
+                else ctx.lineTo(x, y);
+            });
+            ctx.strokeStyle = color;
+            ctx.lineWidth = 1;
+            ctx.stroke();
+        }
+
+        drawMini(netUpHistory, 'rgba(85, 192, 112, 0.6)');
+        drawMini(netDownHistory, 'rgba(85, 136, 221, 0.8)');
+    }
+
+    function formatSpeed(bytesPerSec) {
+        if (bytesPerSec >= 1e6) return (bytesPerSec / 1e6).toFixed(1) + ' MB/s';
+        if (bytesPerSec >= 1e3) return (bytesPerSec / 1e3).toFixed(1) + ' KB/s';
+        return Math.round(bytesPerSec) + ' B/s';
+    }
+
+    // --- Top processes (with trust classification) ---
+    const TRUSTED_PROCS = new Set([
+        'system', 'system idle process', 'svchost.exe', 'csrss.exe', 'wininit.exe',
+        'services.exe', 'lsass.exe', 'smss.exe', 'dwm.exe', 'explorer.exe',
+        'taskhostw.exe', 'sihost.exe', 'fontdrvhost.exe', 'winlogon.exe',
+        'msmpeng.exe', 'securityhealthservice.exe', 'mssense.exe', 'nissrv.exe',
+        'chrome.exe', 'msedge.exe', 'firefox.exe', 'brave.exe',
+        'code.exe', 'antigravity.exe', 'electron.exe', 'node.exe',
+        'python.exe', 'pythonw.exe', 'python3.exe',
+        'searchhost.exe', 'runtimebroker.exe', 'spoolsv.exe',
+        'nvidia share.exe', 'nvcontainer.exe', 'nvdisplay.container.exe',
+        'msi center service.exe', 'silentoptionservice.exe',
+        'steam.exe', 'steamservice.exe', 'steamwebhelper.exe',
+        'discord.exe', 'spotify.exe', 'slack.exe',
+        'protonvpn.exe', 'protonvpnservice.exe', 'wireguardtunnel$proton0.exe',
+        'killer network service (x64).exe', 'killerwifidriver.exe',
+        'intelligentstandby list cleaner.exe',
+        'language_server_windows_x64.exe',
+    ]);
+
+    function classifyProcess(name) {
+        const lower = name.toLowerCase();
+        if (TRUSTED_PROCS.has(lower)) return 'trusted';
+        // Heuristic flags
+        if (lower.includes('miner') || lower.includes('xmrig')) return 'flagged';
+        if (lower.includes('kworker') || lower.match(/^[a-z0-9]{8,}\.exe$/)) return 'flagged';
+        return 'unknown';
+    }
+
+    async function updateTopProcs() {
+        try {
+            const data = await aegis.get('/api/security/processes');
+            if (!data || !data.processes) return;
+            const list = document.getElementById('top-procs-list');
+            if (!list) return;
+
+            const sorted = [...data.processes].sort((a, b) => b.cpu_percent - a.cpu_percent).slice(0, 5);
+            list.innerHTML = sorted.map((p, i) => {
+                const trust = classifyProcess(p.name);
+                const trustIcon = trust === 'trusted' ? '✓' : trust === 'flagged' ? '⚠' : '?';
+                const trustClass = `trust-${trust}`;
+                const cpuStr = p.cpu_percent.toFixed(1) + '%';
+                const memStr = p.memory_mb >= 1024 ? (p.memory_mb / 1024).toFixed(1) + ' GB' : Math.round(p.memory_mb) + ' MB';
+                return `
+                <div class="top-proc-row">
+                    <span class="top-proc-rank">${i + 1}</span>
+                    <span class="top-proc-trust ${trustClass}" title="${trust}">${trustIcon}</span>
+                    <span class="top-proc-name" title="${p.name} (PID: ${p.pid})">${p.name}</span>
+                    <span class="top-proc-cpu">${cpuStr}</span>
+                    <span class="top-proc-mem">${memStr}</span>
+                    <button class="proc-inspect-btn" data-pid="${p.pid}" title="Inspect in Task Manager">⊙</button>
+                </div>`;
+            }).join('');
+
+            // Wire up inspect buttons
+            list.querySelectorAll('.proc-inspect-btn').forEach(btn => {
+                btn.addEventListener('click', () => aegis.openTaskManager());
+            });
+
+            stampPanel('top-procs');
+        } catch (e) { console.warn('top procs:', e); }
+    }
+
+    // --- Security posture mini ---
+    async function updatePostureMini() {
+        try {
+            const data = await aegis.get('/api/threats/last-scan');
+            if (!data || data.score == null) return;
+            const scoreEl = document.getElementById('posture-score');
+            const statusEl = document.getElementById('posture-status');
+            const metaEl = document.getElementById('posture-meta');
+            if (!scoreEl) return;
+
+            animateNumber(scoreEl, data.score);
+
+            if (data.score >= 80) {
+                scoreEl.style.color = '#3de068';
+                statusEl.textContent = '✓ CLEAN';
+                statusEl.style.color = '#3de068';
+            } else if (data.score >= 50) {
+                scoreEl.style.color = '#ffd050';
+                statusEl.textContent = '⚠ GUARDED';
+                statusEl.style.color = '#ffd050';
+            } else {
+                scoreEl.style.color = '#f04444';
+                statusEl.textContent = '⛨ THREATENED';
+                statusEl.style.color = '#f04444';
+            }
+
+            // Context line: findings count + scan age
+            const findings = data.total_findings || 0;
+            const scanTime = data.scan_time || '';
+            let scanAge = '';
+            if (scanTime) {
+                try {
+                    const scanDate = new Date(scanTime);
+                    const secsAgo = Math.floor((Date.now() - scanDate.getTime()) / 1000);
+                    if (secsAgo < 60) scanAge = `${secsAgo}s ago`;
+                    else if (secsAgo < 3600) scanAge = `${Math.floor(secsAgo / 60)}m ago`;
+                    else scanAge = `${Math.floor(secsAgo / 3600)}h ago`;
+                } catch(e) { scanAge = scanTime; }
+            }
+            metaEl.textContent = `${findings} finding${findings !== 1 ? 's' : ''}${scanAge ? ' · Scan: ' + scanAge : ''}`;
+            stampPanel('posture');
+        } catch (e) { /* no scan yet, that's fine */ }
+    }
+
+    // --- Animated number transitions ---
+    function animateNumber(el, target) {
+        const current = parseInt(el.textContent) || 0;
+        if (current === target) { el.textContent = target; return; }
+        const diff = target - current;
+        const steps = 12;
+        let step = 0;
+        const tick = () => {
+            step++;
+            const v = Math.round(current + (diff * step / steps));
+            el.textContent = v;
+            if (step < steps) requestAnimationFrame(tick);
+            else el.textContent = target;
+        };
+        requestAnimationFrame(tick);
+    }
+
+    async function updateSystemStatus() {
+        try {
+            const data = await aegis.get('/api/system/status');
+            if (data.error) return;
+
+            document.getElementById('cpu-usage').textContent = data.cpu_percent + '%';
+            setBar('cpu-bar', data.cpu_percent);
+
+            document.getElementById('ram-usage').textContent = data.ram_percent + '%';
+            setBar('ram-bar', data.ram_percent);
+
+            document.getElementById('ram-detail').textContent =
+                data.ram_used_gb + ' / ' + data.ram_total_gb + ' GB';
+
+            // Push to sparkline history
+            cpuHistory.push(data.cpu_percent);
+            ramHistory.push(data.ram_percent);
+            if (cpuHistory.length > SPARK_MAX) cpuHistory.shift();
+            if (ramHistory.length > SPARK_MAX) ramHistory.shift();
+            drawSparkline();
+
+            // Uptime
+            if (data.boot_time) {
+                document.getElementById('boot-time').textContent = data.boot_time;
+            }
+            if (data.uptime_string) {
+                document.getElementById('uptime-string').textContent = data.uptime_string;
+            }
+
+            // Disk usage
+            const diskContainer = document.getElementById('disk-usage-container');
+            diskContainer.innerHTML = '';
+            (data.disk_usage || []).forEach(disk => {
+                const item = document.createElement('div');
+                item.className = 'disk-item';
+                item.innerHTML = `
+                    <div class="stat-row clickable" data-action="open-settings-storage" title="Open Storage Settings">
+                        <span class="stat-label">${disk.device}</span>
+                        <div class="progress-bar-bg"><div class="progress-bar-fill${disk.percent >= 85 ? ' bar-critical' : disk.percent >= 60 ? ' bar-warning' : ''}" style="width:${disk.percent}%"></div></div>
+                        <span class="stat-value">${disk.free_gb} GB free</span>
+                    </div>
+                `;
+                diskContainer.appendChild(item);
+            });
+
+            stampPanel('system-status');
+            stampPanel('cpu-chart');
+        } catch (e) {
+            console.error('System status error:', e);
+        }
+    }
+
+    async function updateQuickStats() {
+        try {
+            // GPU temp
+            const gpu = await aegis.get('/api/hardware/gpu');
+            if (gpu && gpu.gpu) {
+                document.getElementById('quick-gpu-temp').textContent = gpu.gpu.temperature_c + '°C';
+            }
+            // Battery
+            const bat = await aegis.get('/api/hardware/battery');
+            if (bat && bat.battery) {
+                const icon = bat.battery.plugged_in ? '⚡' : '🔋';
+                document.getElementById('quick-battery').textContent = icon + ' ' + bat.battery.percent + '%';
+            }
+            // Network connections
+            const net = await aegis.get('/api/security/network');
+            if (net && !net.error) {
+                document.getElementById('quick-net-conns').textContent = net.connections_count + ' conns';
+            }
+        } catch (e) {
+            console.error('Quick stats error:', e);
+        }
+    }
+
+    async function updateWeather() {
+        try {
+            const data = await aegis.get('/api/weather/');
+            const el = document.getElementById('weather-data');
+            if (data.error) {
+                el.innerHTML = `<p class="error">Error: ${data.error}</p>`;
+                return;
+            }
+            el.innerHTML = `
+                <p class="temp">${data.temperature_f}°F</p>
+                <p class="description">${data.description}</p>
+                <div class="details">
+                    <span>Feels like: ${data.feels_like_f}°F</span>
+                    <span>Wind: ${data.wind_mph} mph</span>
+                    <span>Humidity: ${data.humidity}%</span>
+                </div>
+            `;
+        } catch (e) {
+            console.error('Weather error:', e);
+        }
+    }
+
+    // Set weather title on load
+    document.getElementById('weather-title').textContent = `Weather — ${weatherLocation}`;
+
+    // ═══════════════════════════════════════════
+    // SECURITY TAB — INVESTIGATION SURFACE
+    // ═══════════════════════════════════════════
+
+    // Shared security snapshot — all sections read from same data
+    let secSnapshot = { processes: [], ports: [], connections: [], startup: [], network: null, ts: 0 };
+
+    // Known noisy — not TRUSTED (system/core) but normal on a dev machine
+    // These suppress 'unusual' classification to reduce false alarms
+    const KNOWN_NOISY = new Set([
+        'ollama.exe', 'ollama app.exe', 'ollama_llama_server.exe',
+        'protonvpn.exe', 'protonvpnservice.exe', 'wireguardtunnel$proton0.exe',
+        'creative cloud.exe', 'cclibrary.exe', 'ccxprocess.exe', 'adobeipcbroker.exe',
+        'adobe desktop service.exe', 'adobe crash processor.exe',
+        'onedrive.exe', 'onedrivesetup.exe',
+        'dropbox.exe', 'filezilla.exe',
+        'msedgewebview2.exe',
+        'msi center.exe', 'msi center service.exe', 'nahimic3.exe',
+        'memcompression', 'crashpad_handler.exe',
+        'conhost.exe', 'creativecloud helper.exe',
+        'languageserver_windows_x64.exe',
+        'openai.exe', 'anthropic.exe',  // AI tools
+        'obs64.exe', 'obs-browser-page.exe',
+    ]);
+
+    // Expected non-local port bindings (process → ports) — don't cause alarm
+    const EXPECTED_PORTS = {
+        'svchost.exe': new Set([135, 445, 5040, 5357, 7680]),
+        'system': new Set([445]),
+        'ollama app.exe': new Set([11434]),
+        'ollama.exe': new Set([11434]),
+        'python.exe': new Set([5000, 5001, 5050, 8000, 8080]),
+        'pythonw.exe': new Set([5000, 5001, 5050, 8000, 8080]),
+        'node.exe': new Set([3000, 3001, 5173, 8080, 9229]),
+        'openedfilesview': new Set([]),
+    };
+
+    // System-critical processes — extra kill confirmation
+    const SYSTEM_CRITICAL = new Set([
+        'svchost.exe', 'csrss.exe', 'lsass.exe', 'smss.exe', 'wininit.exe',
+        'services.exe', 'winlogon.exe', 'dwm.exe', 'explorer.exe',
+        'system', 'system idle process', 'registry',
+    ]);
+
+    // --- Security Summary Bar ---
+    function updateSecuritySummary() {
+        // Count truly unusual (not trusted AND not known-noisy AND has CPU use)
+        const unusualCount = secSnapshot.processes.filter(p => {
+            const lower = p.name.toLowerCase();
+            return !TRUSTED_PROCS.has(lower) && !KNOWN_NOISY.has(lower) && p.cpu_percent > 0;
+        }).length;
+
+        // Count non-local ports that aren't expected for their process
+        const exposedCount = secSnapshot.ports.filter(p => {
+            if (p.exposure === 'LOCALHOST') return false;
+            const procLower = (p.process || '').toLowerCase();
+            const expected = EXPECTED_PORTS[procLower];
+            if (expected && expected.has(p.port)) return false;  // Expected binding
+            return true;
+        }).length;
+
+        const connCount = secSnapshot.connections.length;
+
+        // 3-tier state: STABLE → ATTENTION → ELEVATED → CRITICAL
+        const dot = document.querySelector('.sec-state-dot');
+        const label = document.getElementById('sec-state-label');
+
+        const hasFlags = secSnapshot.processes.some(p => (p.flags || []).length > 0);
+        const hasMultipleFlags = secSnapshot.processes.some(p => (p.flags || []).length >= 2);
+
+        let state = 'stable';
+        let context = 'no anomalies detected';
+        if (hasMultipleFlags) {
+            state = 'critical';
+            context = 'confirmed risk patterns detected';
+        } else if (hasFlags) {
+            state = 'elevated';
+            context = 'flagged activity — no confirmed threat';
+        } else if (unusualCount > 0 && exposedCount > 0) {
+            state = 'attention';
+            context = 'elevated surface area — likely benign';
+        } else if (unusualCount > 0) {
+            state = 'attention';
+            context = 'unrecognized processes active — likely normal';
+        } else if (exposedCount > 0) {
+            state = 'attention';
+            context = 'unknown port bindings detected';
+        }
+
+        dot.className = 'sec-state-dot sec-state-' + state;
+        label.textContent = state.toUpperCase();
+        document.getElementById('sec-state-context').textContent = context;
+
+        document.getElementById('sec-unusual-count').textContent = unusualCount;
+        document.getElementById('sec-exposed-count').textContent = exposedCount;
+        document.getElementById('sec-conn-count').textContent = connCount;
+
+        stampPanel('sec-summary');
+    }
+
+    // --- Ranked Processes with Explain Why ---
+    async function updateProcesses() {
+        try {
+            const data = await aegis.get('/api/security/processes');
+            if (data.error) return;
+            secSnapshot.processes = data.processes;
+
+            const tbody = document.querySelector('#process-table tbody');
+            tbody.innerHTML = '';
+            document.getElementById('proc-count').textContent = data.processes.length;
+
+            // Risk classification — explainable with reason string
+            function classifyRisk(p) {
+                const lower = p.name.toLowerCase();
+                const flags = p.flags || [];
+                if (flags.length > 0) return { level: 'suspicious', reasons: flags.map(f => f.replace(/_/g, ' ').toLowerCase()) };
+                if (TRUSTED_PROCS.has(lower)) return { level: 'normal', reasons: ['baseline trusted process'] };
+                if (KNOWN_NOISY.has(lower)) return { level: 'normal', reasons: ['known application'] };
+                // Truly unusual — explain why
+                const reasons = [];
+                if (!p.exe) reasons.push('no executable path');
+                else if (p.exe.toLowerCase().includes('\\appdata\\')) reasons.push('running from user directory');
+                else if (p.exe.toLowerCase().includes('\\temp\\')) reasons.push('running from temp directory');
+                else reasons.push('not in known baseline');
+                if (p.cpu_percent > 10) reasons.push('elevated CPU usage');
+                return { level: p.cpu_percent > 0 ? 'unusual' : 'normal', reasons };
+            }
+
+            // Risk-weighted sort: suspicious → unusual → normal, then by CPU (secondary for stability)
+            const riskOrder = { suspicious: 0, unusual: 1, normal: 2 };
+            const sorted = [...data.processes].sort((a, b) => {
+                const rA = riskOrder[classifyRisk(a).level];
+                const rB = riskOrder[classifyRisk(b).level];
+                if (rA !== rB) return rA - rB;
+                return b.cpu_percent - a.cpu_percent;
+            }).slice(0, 30);
+
+            sorted.forEach(p => {
+                const { level: risk, reasons } = classifyRisk(p);
+                const dotClass = 'risk-' + risk;
+                const shortPath = p.exe ? (p.exe.length > 35 ? '...' + p.exe.slice(-32) : p.exe) : '—';
+
+                // Path highlighting: suspicious paths get tinted
+                const pathLower = (p.exe || '').toLowerCase();
+                let pathClass = 'td-path';
+                if (pathLower.includes('\\temp\\') || pathLower.includes('\\downloads\\') || pathLower.includes('\\tmp\\')) {
+                    pathClass = 'td-path td-path-suspicious';
+                }
+
+                // Main row — title shows reason on hover
+                const row = document.createElement('tr');
+                row.className = 'proc-row-clickable';
+                row.title = risk !== 'normal' ? reasons.join(', ') : '';
+                row.innerHTML = `
+                    <td class="td-risk"><span class="sec-trust-dot ${dotClass}" title="${risk}: ${reasons.join(', ')}"></span></td>
+                    <td>${p.pid}</td>
+                    <td>${p.name}</td>
+                    <td>${p.cpu_percent}%</td>
+                    <td>${p.memory_mb >= 1024 ? (p.memory_mb / 1024).toFixed(1) + ' GB' : Math.round(p.memory_mb) + ' MB'}</td>
+                    <td class="${pathClass}" title="${p.exe || 'N/A'}">${shortPath}</td>
+                    <td><button class="kill-btn" data-pid="${p.pid}" data-name="${p.name}" data-exe="${p.exe || ''}" data-parent="${p.parent_name || ''}" title="Kill process">Kill</button></td>
+                `;
+                tbody.appendChild(row);
+
+                // Explain Why row — shows reasons + full detail
+                const explainRow = document.createElement('tr');
+                explainRow.className = 'sec-explain-row';
+                const flagsHtml = (p.flags || []).length > 0
+                    ? `<div class="sec-explain-flags">${p.flags.map(f => `<span class="sec-flag-tag">${f}</span>`).join('')}</div>`
+                    : '';
+                const reasonHtml = risk !== 'normal'
+                    ? `<span class="sec-explain-label">Why ${risk}</span><span class="sec-explain-value">${reasons.join(' · ')}</span>`
+                    : '';
+                explainRow.innerHTML = `
+                    <td colspan="7" class="sec-explain-cell">
+                        <div class="sec-explain-grid">
+                            ${reasonHtml}
+                            <span class="sec-explain-label">Path</span>
+                            <span class="sec-explain-value">${p.exe || 'N/A'}</span>
+                            <span class="sec-explain-label">Parent</span>
+                            <span class="sec-explain-value">${p.parent_name || 'N/A'}</span>
+                            <span class="sec-explain-label">User</span>
+                            <span class="sec-explain-value">${p.username || 'N/A'}</span>
+                            <span class="sec-explain-label">CMD</span>
+                            <span class="sec-explain-value">${p.cmdline || 'N/A'}</span>
+                        </div>
+                        ${flagsHtml}
+                    </td>
+                `;
+                tbody.appendChild(explainRow);
+
+                // Click to toggle Explain Why — pure render, no recompute
+                row.addEventListener('click', (e) => {
+                    if (e.target.closest('.kill-btn')) return;
+                    explainRow.classList.toggle('open');
+                });
+            });
+
+            // Kill button handlers — branded modal, no native confirm()
+            tbody.querySelectorAll('.kill-btn').forEach(btn => {
+                btn.addEventListener('click', async (e) => {
+                    e.stopPropagation();
+                    const pid = btn.dataset.pid;
+                    const name = btn.dataset.name;
+                    const exe = btn.dataset.exe || 'Unknown path';
+                    const parent = btn.dataset.parent || 'Unknown';
+                    const isCritical = SYSTEM_CRITICAL.has(name.toLowerCase());
+
+                    // Lookup live stats from snapshot
+                    const procData = secSnapshot.processes.find(p => p.pid === parseInt(pid));
+                    const cpuStr = procData ? procData.cpu_percent + '%' : '—';
+                    const memStr = procData ? (procData.memory_mb >= 1024 ? (procData.memory_mb / 1024).toFixed(1) + ' GB' : Math.round(procData.memory_mb) + ' MB') : '—';
+
+                    let bodyHtml = `
+                        <span class="confirm-label">Process</span>
+                        <span class="confirm-value">${name} (PID ${pid})</span>
+                        <span class="confirm-label">Path</span>
+                        <span class="confirm-value">${exe}</span>
+                        <span class="confirm-label">Parent</span>
+                        <span class="confirm-value">${parent}</span>
+                        <span class="confirm-label">Impact</span>
+                        <span class="confirm-value">CPU ${cpuStr} · Memory ${memStr}</span>
+                    `;
+                    if (isCritical) {
+                        bodyHtml += `<div class="confirm-warning">⚠ System-critical process. Killing may cause instability or BSOD.</div>`;
+                    }
+
+                    const confirmed = await aegisConfirm({
+                        title: isCritical ? 'SYSTEM PROCESS' : `Terminate ${name}`,
+                        bodyHtml,
+                        icon: isCritical ? '⚠' : '⬡',
+                        danger: isCritical
+                    });
+
+                    if (confirmed) {
+                        try {
+                            await aegis.post('/api/defense/sentinel/kill', { pid: parseInt(pid) });
+                            btn.textContent = '✓';
+                            btn.disabled = true;
+                            setTimeout(() => updateProcesses(), 1000);
+                        } catch (e) {
+                            alert('Failed to kill process');
+                        }
+                    }
+                });
+            });
+
+            updateSecuritySummary();
+        } catch (e) {
+            console.error('Processes error:', e);
+        }
+    }
+
+    // --- Network with interpretation badge ---
+    // Track throughput for security tab interpretation
+    let secNetHistory = [];
+    const SEC_NET_HIST_MAX = 20;
+
+    async function updateNetwork() {
+        try {
+            const data = await aegis.get('/api/security/network');
+            if (data.error) return;
+            secSnapshot.network = data;
+
+            document.getElementById('net-sent').textContent = formatBytes(data.bytes_sent);
+            document.getElementById('net-recv').textContent = formatBytes(data.bytes_recv);
+            document.getElementById('net-conns').textContent = data.connections_count;
+            document.getElementById('net-err-in').textContent = data.errors_in;
+            document.getElementById('net-err-out').textContent = data.errors_out;
+
+            // Interpretation: track recv rate
+            secNetHistory.push(data.bytes_recv);
+            if (secNetHistory.length > SEC_NET_HIST_MAX) secNetHistory.shift();
+
+            const badge = document.getElementById('sec-net-state');
+            if (secNetHistory.length >= 3) {
+                const recent = secNetHistory.slice(-3);
+                const deltas = [];
+                for (let i = 1; i < recent.length; i++) {
+                    deltas.push(Math.abs(recent[i] - recent[i-1]));
+                }
+                const avgDelta = deltas.reduce((a, b) => a + b, 0) / deltas.length;
+
+                badge.className = 'sec-interpret-badge';
+                if (avgDelta < 1000) {
+                    badge.textContent = 'IDLE';
+                    badge.classList.add('state-idle');
+                } else if (avgDelta > 50000000) {
+                    badge.textContent = 'BURST';
+                    badge.classList.add('state-burst');
+                } else if (avgDelta > 10000000) {
+                    badge.textContent = 'SPIKE';
+                    badge.classList.add('state-spike');
+                } else {
+                    badge.textContent = 'NORMAL';
+                }
+            }
+        } catch (e) {
+            console.error('Network error:', e);
+        }
+    }
+
+    // --- Ports with exposure + expectation classification ---
+    async function updatePorts() {
+        try {
+            const data = await aegis.get('/api/security/ports');
+            if (data.error) return;
+            secSnapshot.ports = data.ports;
+
+            const tbody = document.querySelector('#port-table tbody');
+            tbody.innerHTML = '';
+            document.getElementById('port-count').textContent = data.ports.length;
+            data.ports.forEach(p => {
+                const row = document.createElement('tr');
+                let expClass, expLabel;
+
+                if (p.exposure === 'LOCALHOST') {
+                    expClass = 'exposure-localhost';
+                    expLabel = 'LOCAL';
+                } else {
+                    // Check if this is an expected non-local binding
+                    const procLower = (p.process || '').toLowerCase();
+                    const expectedPorts = EXPECTED_PORTS[procLower];
+                    if (expectedPorts && expectedPorts.has(p.port)) {
+                        expClass = 'exposure-expected';
+                        expLabel = 'EXPECTED';
+                    } else {
+                        expClass = 'exposure-nonlocal';
+                        expLabel = 'UNKNOWN';
+                    }
+                }
+
+                row.innerHTML = `
+                    <td>${p.port}</td>
+                    <td>${p.process}</td>
+                    <td class="mono">${p.address}</td>
+                    <td><span class="sec-exposure-badge ${expClass}">${expLabel}</span></td>
+                `;
+                tbody.appendChild(row);
+            });
+
+            updateSecuritySummary();
+        } catch (e) {
+            console.error('Ports error:', e);
+        }
+    }
+
+    // --- Connections grouped by process ---
+    async function updateConnections() {
+        try {
+            const data = await aegis.get('/api/security/connections');
+            if (data.error) return;
+            secSnapshot.connections = data.connections;
+
+            const container = document.getElementById('connections-container');
+            document.getElementById('conn-count').textContent = data.connections.length;
+
+            // Group by process
+            const groups = {};
+            data.connections.forEach(c => {
+                if (!groups[c.process]) groups[c.process] = [];
+                groups[c.process].push(c);
+            });
+
+            // Sort groups by connection count (most active first)
+            const sortedGroups = Object.entries(groups).sort((a, b) => b[1].length - a[1].length);
+
+            container.innerHTML = '';
+            sortedGroups.forEach(([proc, conns]) => {
+                const group = document.createElement('div');
+                group.className = 'sec-conn-group';
+
+                group.innerHTML = `
+                    <div class="sec-conn-group-header">
+                        <span class="sec-conn-group-name">${proc}</span>
+                        <span class="sec-conn-group-count">${conns.length} conn${conns.length !== 1 ? 's' : ''}</span>
+                        <span class="sec-conn-group-toggle">▶</span>
+                    </div>
+                    <div class="sec-conn-group-body">
+                        ${conns.map(c => `
+                            <div class="sec-conn-row">
+                                <span>${c.local}</span>
+                                <span>${c.remote}</span>
+                                <span>${c.status}</span>
+                            </div>
+                        `).join('')}
+                    </div>
+                `;
+
+                // Click to toggle expand/collapse
+                group.querySelector('.sec-conn-group-header').addEventListener('click', () => {
+                    group.classList.toggle('open');
+                });
+
+                container.appendChild(group);
+            });
+
+            updateSecuritySummary();
+        } catch (e) {
+            console.error('Connections error:', e);
+        }
+    }
+
+    // --- Startup with risk classification ---
+    async function updateStartup() {
+        try {
+            const data = await aegis.get('/api/security/startup');
+            if (data.error) return;
+            secSnapshot.startup = data.startup_items;
+
+            const tbody = document.querySelector('#startup-table tbody');
+            tbody.innerHTML = '';
+            document.getElementById('startup-count').textContent = data.startup_items.length;
+
+            // Sort: suspicious first, then user, then system
+            const riskOrder = { suspicious: 0, user: 1, system: 2 };
+            const sorted = [...data.startup_items].sort((a, b) => {
+                return (riskOrder[a.location_risk] || 1) - (riskOrder[b.location_risk] || 1);
+            });
+
+            sorted.forEach(item => {
+                const row = document.createElement('tr');
+                const risk = item.location_risk || 'user';
+                const riskLabel = risk.toUpperCase();
+                const shortCmd = item.command.length > 80 ? item.command.substring(0, 77) + '...' : item.command;
+                row.innerHTML = `
+                    <td><span class="sec-startup-risk risk-${risk}">${riskLabel}</span></td>
+                    <td>${item.name}</td>
+                    <td><span class="source-badge source-${item.type}">${item.source}</span></td>
+                    <td class="mono" title="${item.command}">${shortCmd}</td>
+                `;
+                tbody.appendChild(row);
+            });
+        } catch (e) {
+            console.error('Startup error:', e);
+        }
+    }
+
+    // ═══════════════════════════════════════════
+    // HARDWARE TAB
+    // ═══════════════════════════════════════════
+    async function updateGPU() {
+        try {
+            const data = await aegis.get('/api/hardware/gpu');
+            if (!data || !data.gpu) return;
+            const g = data.gpu;
+            document.getElementById('gpu-temp').textContent = g.temperature_c + '°C';
+            // Thermal pressure badge
+            const gpuTempEl = document.getElementById('gpu-temp');
+            if (gpuTempEl) {
+                const existing = gpuTempEl.parentElement.querySelector('.thermal-badge');
+                if (existing) existing.remove();
+                const badge = document.createElement('span');
+                if (g.temperature_c >= 85) { badge.className = 'thermal-badge hot'; badge.textContent = 'HOT'; }
+                else if (g.temperature_c >= 70) { badge.className = 'thermal-badge warm'; badge.textContent = 'WARM'; }
+                else { badge.className = 'thermal-badge normal'; badge.textContent = 'NORMAL'; }
+                gpuTempEl.parentElement.appendChild(badge);
+            }
+            document.getElementById('gpu-util').textContent = g.utilization_percent + '%';
+
+            const vramPercent = (g.vram_used_mb / g.vram_total_mb * 100).toFixed(0);
+            document.getElementById('gpu-vram').textContent = g.vram_used_mb + ' / ' + g.vram_total_mb + ' MB';
+            setBar('gpu-vram-bar', vramPercent);
+
+            document.getElementById('gpu-fan').textContent = g.fan_speed_percent !== null ? g.fan_speed_percent + '%' : 'Auto';
+            document.getElementById('gpu-power').textContent = g.power_draw_w !== null ? g.power_draw_w + ' / ' + g.power_limit_w + ' W' : 'N/A';
+            document.getElementById('gpu-driver').textContent = g.driver_version;
+        } catch (e) {
+            console.error('GPU error:', e);
+        }
+    }
+
+    async function updateCPU() {
+        try {
+            const sys = await aegis.get('/api/system/status');
+            if (sys && !sys.error) {
+                document.getElementById('hw-cpu-usage').textContent = sys.cpu_percent + '%';
+            }
+            document.getElementById('hw-cpu-cores').textContent = navigator.hardwareConcurrency + ' threads';
+
+            const temps = await aegis.get('/api/hardware/temperatures');
+            if (temps && temps.temperatures) {
+                const keys = Object.keys(temps.temperatures);
+                if (keys.length > 0) {
+                    const cpuKey = keys.find(k => !k.toLowerCase().includes('gpu')) || keys[0];
+                    const cpuTemp = temps.temperatures[cpuKey].current;
+                    document.getElementById('hw-cpu-temp').textContent = cpuTemp + '°C';
+                    // CPU thermal pressure badge
+                    const cpuTempEl = document.getElementById('hw-cpu-temp');
+                    if (cpuTempEl) {
+                        const existing = cpuTempEl.parentElement.querySelector('.thermal-badge');
+                        if (existing) existing.remove();
+                        const badge = document.createElement('span');
+                        if (cpuTemp >= 85) { badge.className = 'thermal-badge hot'; badge.textContent = 'HOT'; }
+                        else if (cpuTemp >= 70) { badge.className = 'thermal-badge warm'; badge.textContent = 'WARM'; }
+                        else { badge.className = 'thermal-badge normal'; badge.textContent = 'NORMAL'; }
+                        cpuTempEl.parentElement.appendChild(badge);
+                    }
+                } else {
+                    document.getElementById('hw-cpu-temp').textContent = 'N/A';
+                }
+            }
+        } catch (e) {
+            console.error('CPU error:', e);
+        }
+    }
+
+    async function updateMemory() {
+        try {
+            const data = await aegis.get('/api/hardware/memory');
+            if (data.error) return;
+            const m = data.memory;
+            document.getElementById('mem-usage').textContent = m.used_gb + ' / ' + m.total_gb + ' GB';
+            setBar('mem-bar', m.percent);
+            document.getElementById('mem-available').textContent = m.available_gb + ' GB';
+            document.getElementById('mem-swap').textContent = m.swap_used_gb + ' / ' + m.swap_total_gb + ' GB (' + m.swap_percent + '%)';
+        } catch (e) {
+            console.error('Memory error:', e);
+        }
+    }
+
+    async function updateBattery() {
+        try {
+            const data = await aegis.get('/api/hardware/battery');
+            if (!data || !data.battery) {
+                document.getElementById('battery-percent').textContent = 'N/A';
+                document.getElementById('battery-status').textContent = 'No battery';
+                return;
+            }
+            const b = data.battery;
+            document.getElementById('battery-percent').textContent = b.percent + '%';
+            // Battery bar color: green > 50%, yellow 20-50%, red < 20%
+            const barEl = document.getElementById('battery-bar');
+            if (barEl) {
+                barEl.style.width = Math.min(100, b.percent) + '%';
+                barEl.className = 'progress-bar-fill';
+                if (b.percent < 20) barEl.classList.add('bar-critical');
+                else if (b.percent < 50) barEl.classList.add('bar-warning');
+                // > 50% uses default green
+            }
+            document.getElementById('battery-status').textContent = b.plugged_in ? '⚡ Plugged In' : '🔋 On Battery';
+            document.getElementById('battery-time').textContent = b.time_remaining;
+        } catch (e) {
+            console.error('Battery error:', e);
+        }
+    }
+
+    async function updateDisks() {
+        try {
+            const data = await aegis.get('/api/hardware/disks');
+            if (data.error) return;
+            const tbody = document.querySelector('#disk-table tbody');
+            tbody.innerHTML = '';
+            data.disks.forEach(d => {
+                const row = document.createElement('tr');
+                const smartClass = d.smart_status === 'OK' ? 'smart-ok' : 'smart-unknown';
+                const pct = d.percent || 0;
+                const pressureCls = pct >= 85 ? 'high' : pct >= 70 ? 'med' : 'low';
+                const pressureLabel = pct >= 85 ? 'HIGH' : pct >= 70 ? 'MED' : 'LOW';
+                row.innerHTML = `
+                    <td>${d.device}</td>
+                    <td>${d.mountpoint}</td>
+                    <td>${d.used_gb} / ${d.total_gb} GB (${d.percent}%)</td>
+                    <td>${d.free_gb} GB</td>
+                    <td><span class="status-badge ${smartClass}">${d.smart_status}</span></td>
+                    <td><span class="disk-pressure ${pressureCls}">${pressureLabel}</span></td>
+                `;
+                tbody.appendChild(row);
+            });
+        } catch (e) {
+            console.error('Disks error:', e);
+        }
+    }
+
+    // ═══════════════════════════════════════════
+    // PROJECTS TAB (Redesigned)
+    // ═══════════════════════════════════════════
+    const MARKER_TYPES = {
+        'package.json': { label: 'Node', cls: 'type-node' },
+        'requirements.txt': { label: 'Python', cls: 'type-python' },
+        'Cargo.toml': { label: 'Rust', cls: 'type-rust' },
+        'go.mod': { label: 'Go', cls: 'type-go' },
+    };
+
+    async function loadProjects() {
+        try {
+            const data = await aegis.get('/api/projects/');
+            const el = document.getElementById('project-list');
+            const countBadge = document.getElementById('projects-count');
+            if (data.error) {
+                el.innerHTML = `<p class="error">Error: ${data.error}</p>`;
+                return;
+            }
+            el.innerHTML = '';
+            if (data.projects.length === 0) {
+                el.innerHTML = '<p class="findings-placeholder">No projects found.</p>';
+                if (countBadge) countBadge.textContent = '0';
+                return;
+            }
+            if (countBadge) countBadge.textContent = data.projects.length;
+
+            data.projects.forEach(project => {
+                const typeInfo = MARKER_TYPES[project.marker] || { label: 'Project', cls: 'type-node' };
+                const card = document.createElement('div');
+                card.className = 'project-card';
+                card.innerHTML = `
+                    <div class="project-card-info">
+                        <div class="project-card-name">${project.name}</div>
+                        <div class="project-card-path">${project.path}</div>
+                    </div>
+                    <span class="project-card-marker">${typeInfo.label}</span>
+                    <div class="project-card-actions">
+                        <button class="scan-project-btn" data-path="${project.path}" data-name="${project.name}">⛨ Scan</button>
+                        <button class="btn-folder" data-path="${project.path}">📁</button>
+                        <button class="btn-terminal" data-path="${project.path}">⌨</button>
+                        <button class="delete-project-btn" title="Remove from list">×</button>
+                    </div>
+                `;
+
+                card.querySelector('.btn-folder').addEventListener('click', (e) => {
+                    aegis.openFolder(e.target.dataset.path);
+                });
+                card.querySelector('.btn-terminal').addEventListener('click', (e) => {
+                    aegis.openTerminal(e.target.dataset.path);
+                });
+                card.querySelector('.delete-project-btn').addEventListener('click', () => {
+                    card.remove();
+                    const badge = document.getElementById('projects-count');
+                    const remaining = document.querySelectorAll('.project-card').length;
+                    if (badge) badge.textContent = remaining;
+                });
+                card.querySelector('.scan-project-btn').addEventListener('click', async (e) => {
+                    const btn = e.target;
+                    if (btn.disabled) return;
+                    btn.disabled = true;
+                    btn.textContent = '⏳...';
+                    try {
+                        const result = await aegis.post('/api/scanner/scan', { path: btn.dataset.path });
+                        renderProjectScanResults(result, btn.dataset.name, btn.dataset.path);
+                    } catch (err) {
+                        document.getElementById('project-scan-summary').innerHTML =
+                            '<p class="findings-placeholder">Scan failed — backend error.</p>';
+                    } finally {
+                        btn.disabled = false;
+                        btn.textContent = '⛨ Scan';
+                    }
+                });
+
+                el.appendChild(card);
+            });
+        } catch (e) {
+            console.error('Projects error:', e);
+        }
+    }
+
+    function clearProjectScanResults() {
+        document.getElementById('project-scan-summary').innerHTML =
+            '<p class="findings-placeholder">Select a project and click Scan to check for secrets & vulnerabilities.</p>';
+        document.getElementById('project-findings-list').innerHTML = '';
+    }
+
+    function renderProjectScanResults(result, projectName, projectPath) {
+        const summary = document.getElementById('project-scan-summary');
+        const list = document.getElementById('project-findings-list');
+
+        if (result.error) {
+            summary.innerHTML = `<p class="findings-placeholder">Error: ${result.error}</p>`;
+            list.innerHTML = '';
+            return;
+        }
+
+        const sc = result.severity_counts || {};
+        const totalFindings = result.total_findings || 0;
+
+        // ── Primary Risk Banner ──
+        let primaryRisk = '';
+        if (result.findings && result.findings.length > 0) {
+            const crits = result.findings.filter(f => f.severity === 'CRITICAL');
+            if (crits.length > 0) {
+                const topFile = crits[0].file;
+                primaryRisk = `<div class="primary-risk-banner">⚠ Primary Risk: ${crits.length} hardcoded credential${crits.length > 1 ? 's' : ''} detected in <span style="color:var(--text-primary)">${topFile}</span></div>`;
+            } else {
+                const highs = result.findings.filter(f => f.severity === 'HIGH');
+                if (highs.length > 0) {
+                    primaryRisk = `<div class="primary-risk-banner" style="border-left-color:#e67e22;">⚠ ${highs.length} high-severity issue${highs.length > 1 ? 's' : ''} — ${highs[0].title}</div>`;
+                }
+            }
+        }
+
+        summary.innerHTML = `
+            <div class="project-scan-header">
+                <span class="scan-project-name">${projectName} · ${result.files_scanned} files · ${result.scan_time_ms}ms</span>
+                <button class="clear-scan-btn" id="clear-scan-btn">← Back</button>
+            </div>
+            <div class="project-scan-stats">
+                <div class="project-scan-stat critical"><span class="stat-num">${sc.CRITICAL || 0}</span><span class="stat-label">Critical</span></div>
+                <div class="project-scan-stat high"><span class="stat-num">${sc.HIGH || 0}</span><span class="stat-label">High</span></div>
+                <div class="project-scan-stat medium"><span class="stat-num">${sc.MEDIUM || 0}</span><span class="stat-label">Medium</span></div>
+                <div class="project-scan-stat low"><span class="stat-num">${sc.LOW || 0}</span><span class="stat-label">Low</span></div>
+            </div>
+            ${primaryRisk}
+            <div class="resolution-progress" id="resolution-progress"></div>
+            <div class="batch-fix-bar" id="batch-fix-bar" style="display:none;">
+                <div class="batch-fix-bar-top">
+                    <span class="batch-fix-label" id="batch-fix-label"></span>
+                    <div class="batch-fix-actions">
+                        <button class="finding-btn btn-batch-preview" id="btn-batch-preview">\u26A1 Batch Fix</button>
+                        <button class="finding-btn btn-batch-confirm" id="btn-batch-confirm" style="display:none;">\u2713 Confirm All</button>
+                        <button class="finding-btn btn-batch-cancel" id="btn-batch-cancel" style="display:none;">\u2715 Cancel</button>
+                        <button class="finding-btn btn-batch-rescan" id="btn-batch-rescan" style="display:none;">\uD83D\uDD04 Re-scan Project</button>
+                        <span class="batch-fix-status" id="batch-fix-status"></span>
+                    </div>
+                </div>
+                <div class="batch-fix-preview-panel" id="batch-fix-preview-panel" style="display:none;"></div>
+            </div>
+        `;
+
+        document.getElementById('clear-scan-btn').addEventListener('click', clearProjectScanResults);
+
+        if (!result.findings || result.findings.length === 0) {
+            list.innerHTML = '<p class="findings-placeholder">✓ No secrets or vulnerabilities detected.</p>';
+            return;
+        }
+
+        // ── Generate finding hashes & load persisted resolutions ──
+        const findings = result.findings.map(f => {
+            const key = `${projectPath}|${f.file}|${f.line}|${f.category}|${f.title}`;
+            const hash = simpleHash(key);
+            return { ...f, _hash: hash, _status: 'OPEN' };
+        });
+
+        // Load persisted resolutions from backend
+        aegis.get(`/api/scanner/resolutions?project_path=${encodeURIComponent(projectPath)}`).then(resolutions => {
+            findings.forEach(f => {
+                if (resolutions && resolutions[f._hash]) {
+                    f._status = resolutions[f._hash].status;
+                }
+            });
+            renderFindingCards(findings, projectPath, list);
+            updateResolutionProgress(findings);
+            initBatchFix(findings, projectPath, list);
+        }).catch(() => {
+            renderFindingCards(findings, projectPath, list);
+            updateResolutionProgress(findings);
+            initBatchFix(findings, projectPath, list);
+        });
+    }
+
+    function initBatchFix(findings, projectPath, listEl) {
+        const bar = document.getElementById('batch-fix-bar');
+        const label = document.getElementById('batch-fix-label');
+        const previewBtn = document.getElementById('btn-batch-preview');
+        const confirmBtn = document.getElementById('btn-batch-confirm');
+        const cancelBtn = document.getElementById('btn-batch-cancel');
+        const rescanBtn = document.getElementById('btn-batch-rescan');
+        const statusEl = document.getElementById('batch-fix-status');
+        const previewPanel = document.getElementById('batch-fix-preview-panel');
+
+        const openFindings = findings.filter(f => f._status === 'OPEN');
+        if (openFindings.length < 2) return;
+
+        label.innerHTML = `<span style="color:var(--gold)">\u26A1</span> ${openFindings.length} open findings \u2014 batch auto-fix available`;
+        bar.style.display = 'block';
+
+        previewBtn.addEventListener('click', async () => {
+            previewBtn.disabled = true;
+            previewBtn.textContent = '\u23F3 Analyzing...';
+            statusEl.textContent = '';
+            try {
+                const result = await aegis.post('/api/scanner/batch_fix', {
+                    project_path: projectPath,
+                    findings: openFindings.map(f => ({ file: f.file, line: f.line, category: f.category, title: f.title, _hash: f._hash })),
+                    confirm: false,
+                });
+                if (result.status === 'no_eligible') {
+                    statusEl.textContent = '\u26A0 No high-confidence fixes available.';
+                    statusEl.style.color = 'var(--gold)';
+                    previewBtn.disabled = false;
+                    previewBtn.textContent = '\u26A1 Batch Fix';
+                    return;
+                }
+                const changes = result.changes || [];
+                const skipped = result.skipped || 0;
+                let html = `<div class="batch-preview-summary"><span style="color:#55c070">${changes.length} fixes</span> across <span style="color:var(--gold)">${result.files_affected} files</span>${skipped > 0 ? ` \u2014 <span style="color:var(--text-muted)">${skipped} skipped (no auto-fix)</span>` : ''}</div>`;
+                const byFile = {};
+                changes.forEach(c => { if (!byFile[c.file]) byFile[c.file] = []; byFile[c.file].push(c); });
+                Object.entries(byFile).forEach(([file, fc]) => {
+                    html += `<div class="batch-file-group"><div class="batch-file-name">${file} (${fc.length})</div>`;
+                    fc.forEach(c => {
+                        html += `<div class="diff-entry"><span class="diff-line-num">L${c.line} \u2014 ${c.category}</span><div class="diff-old">\u2212 ${escapeHtml(c.old)}</div><div class="diff-new">\u002B ${escapeHtml(c.new)}</div></div>`;
+                    });
+                    html += '</div>';
+                });
+                previewPanel.innerHTML = html;
+                previewPanel.style.display = 'block';
+                previewBtn.style.display = 'none';
+                confirmBtn.style.display = 'inline-block';
+                cancelBtn.style.display = 'inline-block';
+            } catch (err) {
+                statusEl.textContent = '\u274C Failed to compute batch preview';
+                statusEl.style.color = '#e74c3c';
+            } finally {
+                previewBtn.disabled = false;
+                previewBtn.textContent = '\u26A1 Batch Fix';
+            }
+        });
+
+        confirmBtn.addEventListener('click', async () => {
+            confirmBtn.disabled = true;
+            confirmBtn.textContent = '\u23F3 Applying...';
+            statusEl.textContent = '';
+            try {
+                const result = await aegis.post('/api/scanner/batch_fix', {
+                    project_path: projectPath,
+                    findings: openFindings.map(f => ({ file: f.file, line: f.line, category: f.category, title: f.title, _hash: f._hash })),
+                    confirm: true,
+                });
+                if (result.status === 'applied') {
+                    const changes = result.changes || [];
+                    statusEl.innerHTML = `<span style="color:#55c070">\u2713 Applied ${changes.length} fixes across ${result.files_modified} files</span>`;
+                    const fixedHashes = new Set(changes.map(c => c._hash));
+                    findings.forEach(f => {
+                        if (fixedHashes.has(f._hash)) {
+                            f._status = 'FIXED';
+                            const card = listEl.querySelector(`[data-hash="${f._hash}"]`);
+                            if (card) {
+                                const se = card.querySelector('.finding-status');
+                                if (se) { se.textContent = 'FIXED \u2713'; se.className = 'finding-status status-fixed'; }
+                                card.classList.add('resolved');
+                            }
+                        }
+                    });
+                    updateResolutionProgress(findings);
+                    confirmBtn.style.display = 'none';
+                    cancelBtn.style.display = 'none';
+                    rescanBtn.style.display = 'inline-block';
+                    const remaining = findings.filter(f => f._status === 'OPEN').length;
+                    label.innerHTML = `<span style="color:#55c070">\u2713</span> Batch complete \u2014 ${remaining} findings remain open`;
+                } else {
+                    statusEl.textContent = '\u274C ' + (result.error || 'Apply failed');
+                    statusEl.style.color = '#e74c3c';
+                }
+            } catch (err) {
+                statusEl.textContent = '\u274C Batch apply failed';
+                statusEl.style.color = '#e74c3c';
+            } finally {
+                confirmBtn.disabled = false;
+                confirmBtn.textContent = '\u2713 Confirm All';
+            }
+        });
+
+        cancelBtn.addEventListener('click', () => {
+            previewPanel.style.display = 'none';
+            previewPanel.innerHTML = '';
+            confirmBtn.style.display = 'none';
+            cancelBtn.style.display = 'none';
+            previewBtn.style.display = 'inline-block';
+            statusEl.textContent = '';
+        });
+
+        rescanBtn.addEventListener('click', async () => {
+            rescanBtn.disabled = true;
+            rescanBtn.textContent = '\uD83D\uDD04 Scanning...';
+            statusEl.textContent = '';
+            try {
+                const result = await aegis.post('/api/scanner/scan', { project_path: projectPath });
+                const projName = projectPath.split(/[\\/]/).pop();
+                renderProjectScanResults(result, projName, projectPath);
+            } catch (err) {
+                statusEl.textContent = '\u274C Re-scan failed';
+                statusEl.style.color = '#e74c3c';
+            } finally {
+                rescanBtn.disabled = false;
+                rescanBtn.textContent = '\uD83D\uDD04 Re-scan Project';
+            }
+        });
+    }
+
+    function simpleHash(str) {
+        let hash = 0;
+        for (let i = 0; i < str.length; i++) {
+            const char = str.charCodeAt(i);
+            hash = ((hash << 5) - hash) + char;
+            hash = hash & hash; // Convert to 32-bit
+        }
+        return Math.abs(hash).toString(16).padStart(8, '0');
+    }
+
+    function updateResolutionProgress(findings) {
+        const el = document.getElementById('resolution-progress');
+        if (!el) return;
+        const total = findings.length;
+        const resolved = findings.filter(f => f._status === 'FIXED' || f._status === 'IGNORED').length;
+        const pct = total > 0 ? Math.round((resolved / total) * 100) : 0;
+        el.innerHTML = `<span style="color:var(--text-muted)">Resolved:</span> <span style="color:${resolved === total ? '#55c070' : 'var(--gold)'};font-weight:700">${resolved} / ${total}</span> <span style="color:var(--text-muted)">(${pct}%)</span>`;
+    }
+
+    function renderFindingCards(findings, projectPath, container) {
+        container.innerHTML = '';
+
+        findings.forEach((f, i) => {
+            const card = document.createElement('div');
+            card.className = `project-finding-card ${f._status === 'FIXED' ? 'resolved' : ''} ${f._status === 'IGNORED' ? 'ignored' : ''}`;
+            card.id = `finding-card-${i}`;
+            card.setAttribute('data-hash', f._hash);
+
+            const statusClass = f._status === 'FIXED' ? 'status-fixed' : f._status === 'IGNORED' ? 'status-ignored' : 'status-open';
+            const statusLabel = f._status === 'FIXED' ? 'FIXED \u2713' : f._status === 'IGNORED' ? 'IGNORED' : 'OPEN';
+
+            card.innerHTML = `
+                <div class="finding-card-header">
+                    <span class="sev-badge ${f.severity.toLowerCase()}">${f.severity}</span>
+                    <span class="finding-status ${statusClass}">${statusLabel}</span>
+                </div>
+                <div class="finding-card-title">${f.title}</div>
+                <div class="finding-file">${f.file}:${f.line}</div>
+                <div class="finding-card-category">${f.category}</div>
+                <div class="finding-card-actions">
+                    <button class="finding-btn btn-viewfix" title="View code and fix inline">\u270E View \u0026 Fix</button>
+                    <button class="finding-btn btn-suggest" title="Get fix suggestion">\uD83D\uDCA1 Suggest Fix</button>
+                    <button class="finding-btn btn-rescan" title="Re-scan this file to verify fix">\uD83D\uDD04 Re-scan</button>
+                    <button class="finding-btn btn-ignore" title="Mark as ignored">\u2715 Ignore</button>
+                </div>
+                <div class="suggestion-panel" id="suggestion-${i}" style="display:none;"></div>
+                <div class="inline-editor-panel" id="editor-${i}" style="display:none;"></div>
+            `;
+
+            // ── View & Fix (Inline Editor) ──
+            card.querySelector('.btn-viewfix').addEventListener('click', async (e) => {
+                const btn = e.target;
+                const editorPanel = card.querySelector('.inline-editor-panel');
+                if (editorPanel.style.display !== 'none') {
+                    editorPanel.style.display = 'none';
+                    return;
+                }
+                btn.disabled = true;
+                btn.textContent = '\u23F3 Loading...';
+                try {
+                    const result = await aegis.post('/api/scanner/read_file', {
+                        project_path: projectPath,
+                        file: f.file,
+                        line: f.line,
+                        context: 12,
+                    });
+                    if (result.error) {
+                        editorPanel.innerHTML = `<div style="color:#e74c3c;padding:10px">${result.error}</div>`;
+                        editorPanel.style.display = 'block';
+                        return;
+                    }
+                    renderInlineEditor(editorPanel, result, f, projectPath, findings, card);
+                    editorPanel.style.display = 'block';
+                } catch (err) {
+                    editorPanel.innerHTML = '<div style="color:#e74c3c;padding:10px">Failed to load file content.</div>';
+                    editorPanel.style.display = 'block';
+                } finally {
+                    btn.disabled = false;
+                    btn.textContent = '\u270E View \u0026 Fix';
+                }
+            });
+
+            // ── Suggest Fix ──
+            card.querySelector('.btn-suggest').addEventListener('click', async (e) => {
+                const btn = e.target;
+                const panel = card.querySelector('.suggestion-panel');
+                if (panel.style.display !== 'none') {
+                    panel.style.display = 'none';
+                    return;
+                }
+                btn.disabled = true;
+                btn.textContent = '\u23F3...';
+                try {
+                    const result = await aegis.post('/api/scanner/suggest_fix', {
+                        finding: { category: f.category, title: f.title }
+                    });
+                    const confPct = Math.round((result.confidence || 0) * 100);
+                    const confColor = confPct >= 85 ? '#55c070' : confPct >= 60 ? 'var(--gold)' : '#e74c3c';
+                    const canAutoFix = confPct >= 85;
+                    panel.innerHTML = `
+                        <div class="suggestion-header">
+                            <span style="color:var(--gold);font-weight:600">Remediation</span>
+                            <span style="color:${confColor};font-size:0.85em">Confidence: ${confPct}%</span>
+                        </div>
+                        <div class="suggestion-text">${result.suggestion || 'No suggestion available.'}</div>
+                        ${result.example_patch ? `<pre class="suggestion-patch">${escapeHtml(result.example_patch)}</pre>` : ''}
+                        ${result.docs_url ? `<div class="suggestion-docs"><a href="#" onclick="return false;" style="color:var(--gold);font-size:0.8em">${result.docs_url}</a></div>` : ''}
+                        ${canAutoFix ? `<div class="apply-fix-section" id="apply-fix-${i}">
+                            <div class="apply-fix-preview" style="display:none;"></div>
+                            <button class="finding-btn btn-apply-fix" title="Preview and apply this fix automatically">\u26A1 Apply Fix</button>
+                            <button class="finding-btn btn-confirm-apply" style="display:none;">\u2713 Confirm Apply</button>
+                            <button class="finding-btn btn-cancel-apply" style="display:none;">\u2715 Cancel</button>
+                            <span class="apply-fix-status" style="font-size:0.8em;margin-left:8px;color:var(--text-muted)"></span>
+                        </div>` : ''}
+                    `;
+                    panel.style.display = 'block';
+
+                    // Wire up Apply Fix button if available
+                    if (canAutoFix) {
+                        const applyBtn = panel.querySelector('.btn-apply-fix');
+                        const confirmApplyBtn = panel.querySelector('.btn-confirm-apply');
+                        const cancelApplyBtn = panel.querySelector('.btn-cancel-apply');
+                        const applyPreview = panel.querySelector('.apply-fix-preview');
+                        const applyStatus = panel.querySelector('.apply-fix-status');
+
+                        applyBtn.addEventListener('click', async () => {
+                            applyBtn.disabled = true;
+                            applyBtn.textContent = '\u23F3 Analyzing...';
+                            try {
+                                const preview = await aegis.post('/api/scanner/apply_fix', {
+                                    project_path: projectPath,
+                                    file: f.file,
+                                    line: f.line,
+                                    category: f.category,
+                                    title: f.title,
+                                    confirm: false,
+                                });
+                                if (preview.status === 'preview' && preview.diff) {
+                                    let diffHtml = '';
+                                    preview.diff.forEach(d => {
+                                        diffHtml += `<div class="diff-entry">` +
+                                            `<span class="diff-line-num">L${d.line}</span>` +
+                                            `<div class="diff-old">\u2212 ${escapeHtml(d.old)}</div>` +
+                                            `<div class="diff-new">\u002B ${escapeHtml(d.new)}</div>` +
+                                            `</div>`;
+                                    });
+                                    applyPreview.innerHTML = diffHtml;
+                                    applyPreview.style.display = 'block';
+                                    applyBtn.style.display = 'none';
+                                    confirmApplyBtn.style.display = 'inline-block';
+                                    cancelApplyBtn.style.display = 'inline-block';
+                                } else if (preview.status === 'no_change') {
+                                    applyStatus.textContent = '\u26A0 Pattern did not match \u2014 use manual edit';
+                                    applyStatus.style.color = 'var(--gold)';
+                                } else {
+                                    applyStatus.textContent = '\u274C ' + (preview.error || 'Unknown error');
+                                    applyStatus.style.color = '#e74c3c';
+                                }
+                            } catch (err) {
+                                applyStatus.textContent = '\u274C Failed to generate preview';
+                                applyStatus.style.color = '#e74c3c';
+                            } finally {
+                                applyBtn.disabled = false;
+                                applyBtn.textContent = '\u26A1 Apply Fix';
+                            }
+                        });
+
+                        confirmApplyBtn.addEventListener('click', async () => {
+                            confirmApplyBtn.disabled = true;
+                            confirmApplyBtn.textContent = '\u23F3 Applying...';
+                            try {
+                                const applied = await aegis.post('/api/scanner/apply_fix', {
+                                    project_path: projectPath,
+                                    file: f.file,
+                                    line: f.line,
+                                    category: f.category,
+                                    title: f.title,
+                                    confirm: true,
+                                });
+                                if (applied.status === 'applied') {
+                                    applyStatus.textContent = `\u2713 Applied \u2014 backup: ${applied.backup}`;
+                                    applyStatus.style.color = '#55c070';
+                                    confirmApplyBtn.style.display = 'none';
+                                    cancelApplyBtn.style.display = 'none';
+                                    // Auto-trigger verify
+                                    const verifyResult = await aegis.post('/api/scanner/verify_file', {
+                                        project_path: projectPath,
+                                        file: f.file,
+                                        category: f.category,
+                                        finding_hash: f._hash,
+                                    });
+                                    const statusEl = card.querySelector('.finding-status');
+                                    if (verifyResult.status === 'RESOLVED') {
+                                        f._status = 'FIXED';
+                                        statusEl.textContent = 'FIXED \u2713';
+                                        statusEl.className = 'finding-status status-fixed';
+                                        card.classList.add('resolved');
+                                        applyStatus.textContent += ' \u2014 Verified \u2713';
+                                    }
+                                    updateResolutionProgress(findings);
+                                } else {
+                                    applyStatus.textContent = '\u274C ' + (applied.error || 'Apply failed');
+                                    applyStatus.style.color = '#e74c3c';
+                                }
+                            } catch (err) {
+                                applyStatus.textContent = '\u274C Apply failed';
+                                applyStatus.style.color = '#e74c3c';
+                            } finally {
+                                confirmApplyBtn.disabled = false;
+                                confirmApplyBtn.textContent = '\u2713 Confirm Apply';
+                            }
+                        });
+
+                        cancelApplyBtn.addEventListener('click', () => {
+                            applyPreview.style.display = 'none';
+                            confirmApplyBtn.style.display = 'none';
+                            cancelApplyBtn.style.display = 'none';
+                            applyBtn.style.display = 'inline-block';
+                            applyStatus.textContent = '';
+                        });
+                    }
+                } catch (err) {
+                    panel.innerHTML = '<div style="color:#e74c3c">Failed to load suggestion.</div>';
+                    panel.style.display = 'block';
+                } finally {
+                    btn.disabled = false;
+                    btn.textContent = '\uD83D\uDCA1 Suggest Fix';
+                }
+            });
+
+            // ── Re-scan (Verify) ──
+            card.querySelector('.btn-rescan').addEventListener('click', async (e) => {
+                const btn = e.target;
+                btn.disabled = true;
+                btn.textContent = '\uD83D\uDD04 Verifying...';
+                try {
+                    const result = await aegis.post('/api/scanner/verify_file', {
+                        project_path: projectPath,
+                        file: f.file,
+                        category: f.category,
+                        finding_hash: f._hash,
+                    });
+                    const statusEl = card.querySelector('.finding-status');
+                    if (result.status === 'RESOLVED') {
+                        f._status = 'FIXED';
+                        statusEl.textContent = 'FIXED \u2713';
+                        statusEl.className = 'finding-status status-fixed';
+                        card.classList.add('resolved');
+                        aegis.notify('Finding Resolved', `${f.title} in ${f.file} \u2014 verified fixed.`);
+                    } else {
+                        f._status = 'OPEN';
+                        statusEl.textContent = `STILL PRESENT (${result.findings_remaining})`;
+                        statusEl.className = 'finding-status status-open';
+                        card.classList.remove('resolved');
+                    }
+                    updateResolutionProgress(findings);
+                } catch (err) {
+                    console.warn('Verify failed:', err);
+                } finally {
+                    btn.disabled = false;
+                    btn.textContent = '\uD83D\uDD04 Re-scan';
+                }
+            });
+
+            // ── Ignore ──
+            card.querySelector('.btn-ignore').addEventListener('click', async () => {
+                f._status = 'IGNORED';
+                const statusEl = card.querySelector('.finding-status');
+                statusEl.textContent = 'IGNORED';
+                statusEl.className = 'finding-status status-ignored';
+                card.classList.add('ignored');
+                try {
+                    await aegis.post('/api/scanner/resolution', {
+                        finding_hash: f._hash,
+                        project_path: projectPath,
+                        file: f.file,
+                        category: f.category,
+                        title: f.title,
+                        status: 'IGNORED',
+                    });
+                } catch (err) { console.warn('Resolution persist failed:', err); }
+                updateResolutionProgress(findings);
+            });
+
+            container.appendChild(card);
+        });
+    }
+
+    function renderInlineEditor(panel, fileData, finding, projectPath, findings, card) {
+        // ── State machine: VIEWING → EDITING → DIRTY → SAVED → VERIFIED ──
+        let editorState = 'VIEWING';
+        let originalText = fileData.lines.map(l => l.text).join('\n');
+
+        function buildCodeView() {
+            let html = '';
+            fileData.lines.forEach(line => {
+                const cls = line.is_target ? 'editor-line target-line' : 'editor-line';
+                html += `<div class="${cls}" data-line="${line.num}">` +
+                    `<span class="editor-line-num">${line.num}</span>` +
+                    `<span class="editor-line-text">${escapeHtml(line.text)}</span>` +
+                    `</div>`;
+            });
+            return html;
+        }
+
+        panel.innerHTML = `
+            <div class="inline-editor-header">
+                <span class="editor-filename">${fileData.file}</span>
+                <div style="display:flex;align-items:center;gap:10px">
+                    <span class="editor-state-badge" id="estate-${finding._hash}">VIEWING</span>
+                    <span class="editor-line-info">Lines ${fileData.start_line}\u2013${fileData.end_line} of ${fileData.total_lines}</span>
+                </div>
+            </div>
+            <div class="inline-editor-code" id="editor-code-${finding._hash}">
+                ${buildCodeView()}
+            </div>
+            <div class="inline-editor-input" id="editor-input-${finding._hash}" style="display:none;">
+                <textarea class="editor-textarea" spellcheck="false"></textarea>
+            </div>
+            <div class="editor-diff-preview" id="diff-preview-${finding._hash}" style="display:none;"></div>
+            <div class="inline-editor-toolbar">
+                <button class="finding-btn btn-edit-toggle">\u270E Edit</button>
+                <button class="finding-btn btn-preview-diff" style="display:none;">\u0394 Preview Changes</button>
+                <button class="finding-btn btn-save" style="display:none;">\uD83D\uDCBE Confirm Save</button>
+                <button class="finding-btn btn-cancel-edit" style="display:none;">\u2715 Cancel</button>
+                <button class="finding-btn btn-verify-file" style="display:none;">\uD83D\uDD04 Verify Fix</button>
+                <span class="editor-save-status" style="margin-left:auto;font-size:0.8em;color:var(--text-muted)"></span>
+            </div>
+        `;
+
+        const codeView = panel.querySelector('.inline-editor-code');
+        const inputView = panel.querySelector('.inline-editor-input');
+        const textarea = panel.querySelector('.editor-textarea');
+        const diffPreview = panel.querySelector('.editor-diff-preview');
+        const editBtn = panel.querySelector('.btn-edit-toggle');
+        const previewBtn = panel.querySelector('.btn-preview-diff');
+        const saveBtn = panel.querySelector('.btn-save');
+        const cancelBtn = panel.querySelector('.btn-cancel-edit');
+        const verifyBtn = panel.querySelector('.btn-verify-file');
+        const statusSpan = panel.querySelector('.editor-save-status');
+        const stateBadge = panel.querySelector('.editor-state-badge');
+
+        function setState(newState) {
+            editorState = newState;
+            stateBadge.textContent = newState;
+            stateBadge.className = 'editor-state-badge state-' + newState.toLowerCase();
+
+            // Reset all buttons
+            editBtn.style.display = 'none';
+            previewBtn.style.display = 'none';
+            saveBtn.style.display = 'none';
+            cancelBtn.style.display = 'none';
+            verifyBtn.style.display = 'none';
+
+            switch (newState) {
+                case 'VIEWING':
+                    editBtn.style.display = 'inline-block';
+                    codeView.style.display = 'block';
+                    inputView.style.display = 'none';
+                    diffPreview.style.display = 'none';
+                    break;
+                case 'EDITING':
+                    cancelBtn.style.display = 'inline-block';
+                    previewBtn.style.display = 'inline-block';
+                    codeView.style.display = 'none';
+                    inputView.style.display = 'block';
+                    diffPreview.style.display = 'none';
+                    break;
+                case 'DIRTY':
+                    cancelBtn.style.display = 'inline-block';
+                    saveBtn.style.display = 'inline-block';
+                    previewBtn.style.display = 'inline-block';
+                    codeView.style.display = 'none';
+                    inputView.style.display = 'block';
+                    break;
+                case 'SAVED':
+                    verifyBtn.style.display = 'inline-block';
+                    editBtn.style.display = 'inline-block';
+                    codeView.style.display = 'block';
+                    inputView.style.display = 'none';
+                    diffPreview.style.display = 'none';
+                    break;
+                case 'VERIFIED':
+                    codeView.style.display = 'block';
+                    inputView.style.display = 'none';
+                    diffPreview.style.display = 'none';
+                    break;
+            }
+        }
+
+        // ── Enter edit mode ──
+        editBtn.addEventListener('click', () => {
+            originalText = fileData.lines.map(l => l.text).join('\n');
+            textarea.value = originalText;
+            textarea.rows = fileData.lines.length + 2;
+            setState('EDITING');
+            textarea.focus();
+            // Scroll to target line
+            const lineIndex = finding.line - fileData.start_line;
+            if (lineIndex > 0) {
+                textarea.scrollTop = Math.max(0, (lineIndex - 3) * 20);
+            }
+        });
+
+        // ── Detect dirty state ──
+        textarea.addEventListener('input', () => {
+            if (textarea.value !== originalText) {
+                if (editorState !== 'DIRTY') setState('DIRTY');
+            } else {
+                if (editorState !== 'EDITING') setState('EDITING');
+            }
+        });
+
+        // ── Preview diff ──
+        previewBtn.addEventListener('click', async () => {
+            const editedTextLines = textarea.value.split('\n');
+            const linesToCheck = editedTextLines.map((text, idx) => ({
+                num: fileData.start_line + idx,
+                text: text,
+            }));
+
+            try {
+                const result = await aegis.post('/api/scanner/preview_diff', {
+                    project_path: projectPath,
+                    file: finding.file,
+                    lines: linesToCheck,
+                });
+
+                if (!result.diff || result.diff.length === 0) {
+                    diffPreview.innerHTML = '<div class="diff-empty">No changes detected.</div>';
+                } else {
+                    let diffHtml = `<div class="diff-header">${result.total_changes} line${result.total_changes > 1 ? 's' : ''} changed</div>`;
+                    result.diff.forEach(d => {
+                        diffHtml += `<div class="diff-entry">` +
+                            `<span class="diff-line-num">L${d.line}</span>` +
+                            `<div class="diff-old">\u2212 ${escapeHtml(d.old)}</div>` +
+                            `<div class="diff-new">\u002B ${escapeHtml(d.new)}</div>` +
+                            `</div>`;
+                    });
+                    diffPreview.innerHTML = diffHtml;
+                }
+                diffPreview.style.display = 'block';
+            } catch (err) {
+                diffPreview.innerHTML = '<div style="color:#e74c3c">Failed to compute diff.</div>';
+                diffPreview.style.display = 'block';
+            }
+        });
+
+        // ── Cancel ──
+        cancelBtn.addEventListener('click', () => {
+            textarea.value = originalText;
+            statusSpan.textContent = '';
+            diffPreview.style.display = 'none';
+            setState('VIEWING');
+        });
+
+        // ── Save with diff ──
+        saveBtn.addEventListener('click', async () => {
+            saveBtn.disabled = true;
+            saveBtn.textContent = '\u23F3 Saving...';
+            statusSpan.textContent = '';
+
+            const editedTextLines = textarea.value.split('\n');
+            const linesToSave = editedTextLines.map((text, idx) => ({
+                num: fileData.start_line + idx,
+                text: text,
+            }));
+
+            try {
+                const result = await aegis.post('/api/scanner/write_file', {
+                    project_path: projectPath,
+                    file: finding.file,
+                    lines: linesToSave,
+                });
+
+                if (result.error) {
+                    statusSpan.textContent = '\u274C ' + result.error;
+                    statusSpan.style.color = '#e74c3c';
+                } else {
+                    statusSpan.textContent = `\u2713 Saved (${result.lines_modified} lines) \u2014 backup: ${result.backup}`;
+                    statusSpan.style.color = '#55c070';
+
+                    // Update view with saved content
+                    fileData.lines = editedTextLines.map((text, idx) => ({
+                        num: fileData.start_line + idx,
+                        text: text,
+                        is_target: (fileData.start_line + idx) === finding.line,
+                    }));
+                    originalText = editedTextLines.join('\n');
+                    codeView.innerHTML = buildCodeView();
+
+                    // Show diff in preview if changes were made
+                    if (result.diff && result.diff.length > 0) {
+                        let diffHtml = `<div class="diff-header">\u2713 Applied ${result.diff.length} change${result.diff.length > 1 ? 's' : ''}</div>`;
+                        result.diff.forEach(d => {
+                            diffHtml += `<div class="diff-entry">` +
+                                `<span class="diff-line-num">L${d.line}</span>` +
+                                `<div class="diff-old">\u2212 ${escapeHtml(d.old)}</div>` +
+                                `<div class="diff-new">\u002B ${escapeHtml(d.new)}</div>` +
+                                `</div>`;
+                        });
+                        diffPreview.innerHTML = diffHtml;
+                        diffPreview.style.display = 'block';
+                    }
+
+                    setState('SAVED');
+                }
+            } catch (err) {
+                statusSpan.textContent = '\u274C Save failed';
+                statusSpan.style.color = '#e74c3c';
+            } finally {
+                saveBtn.disabled = false;
+                saveBtn.textContent = '\uD83D\uDCBE Confirm Save';
+            }
+        });
+
+        // ── Verify (targeted file re-scan after save) ──
+        verifyBtn.addEventListener('click', async () => {
+            verifyBtn.disabled = true;
+            verifyBtn.textContent = '\uD83D\uDD04 Verifying...';
+            try {
+                const result = await aegis.post('/api/scanner/verify_file', {
+                    project_path: projectPath,
+                    file: finding.file,
+                    category: finding.category,
+                    finding_hash: finding._hash,
+                });
+                const statusEl = card.querySelector('.finding-status');
+                if (result.status === 'RESOLVED') {
+                    finding._status = 'FIXED';
+                    statusEl.textContent = 'FIXED \u2713';
+                    statusEl.className = 'finding-status status-fixed';
+                    card.classList.add('resolved');
+                    setState('VERIFIED');
+                    statusSpan.textContent = '\u2713 Verified \u2014 finding resolved';
+                    statusSpan.style.color = '#55c070';
+                } else {
+                    statusSpan.textContent = `\u26A0 Still present (${result.findings_remaining} matches)`;
+                    statusSpan.style.color = 'var(--gold)';
+                    setState('SAVED');
+                }
+                updateResolutionProgress(findings);
+            } catch (err) {
+                statusSpan.textContent = '\u274C Verify failed';
+                statusSpan.style.color = '#e74c3c';
+            } finally {
+                verifyBtn.disabled = false;
+                verifyBtn.textContent = '\uD83D\uDD04 Verify Fix';
+            }
+        });
+    }
+
+    function escapeHtml(str) {
+        return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    }
+
+    // ═══════════════════════════════════════════
+    // THREATS TAB
+    // ═══════════════════════════════════════════
+    let lastScanData = null;
+    let scanCooldown = false;
+    let autoScanTimer = null;
+
+    const RING_CIRCUMFERENCE = 326.7;
+
+    function updateScoreGauge(score) {
+        const ring = document.getElementById('score-ring-fill');
+        const text = document.getElementById('score-text');
+        const status = document.getElementById('threat-status');
+
+        text.textContent = score;
+
+        const offset = RING_CIRCUMFERENCE - (score / 100) * RING_CIRCUMFERENCE;
+        ring.style.strokeDashoffset = offset;
+
+        ring.classList.remove('score-warning', 'score-danger');
+        if (score >= 80) {
+            status.textContent = '✓ CLEAN';
+            status.style.color = '#55c070';
+        } else if (score >= 50) {
+            ring.classList.add('score-warning');
+            status.textContent = '⚠ GUARDED';
+            status.style.color = '#f0c040';
+        } else {
+            ring.classList.add('score-danger');
+            status.textContent = '⛨ THREATENED';
+            status.style.color = '#e05555';
+        }
+    }
+
+    function renderFindings(findings) {
+        const list = document.getElementById('findings-list');
+        const count = document.getElementById('findings-count');
+        const cats = document.getElementById('findings-categories');
+
+        count.textContent = findings.length;
+
+        if (!findings.length) {
+            list.innerHTML = '<p class="findings-placeholder">✓ No threats detected. System clean.</p>';
+            cats.innerHTML = '';
+            return;
+        }
+
+        const catCounts = {};
+        findings.forEach(f => { catCounts[f.category] = (catCounts[f.category] || 0) + 1; });
+        cats.innerHTML = Object.entries(catCounts).map(([cat, n]) =>
+            `<span class="category-pill">${cat} (${n})</span>`
+        ).join('');
+
+        list.innerHTML = '';
+        findings.forEach(f => {
+            const card = document.createElement('div');
+            card.className = `finding-card sev-${f.severity}`;
+
+            // Determine available actions based on finding type
+            const hasPID = f.detail && f.detail.match(/PID\s+(\d+)/i);
+            const hasFile = f.detail && (f.detail.match(/Binary:\s+(.+)/i) || f.detail.match(/File:\s+(.+)/i));
+
+            let actionsHtml = '<div class="finding-actions">';
+            if (hasPID) {
+                actionsHtml += `<button class="finding-action-btn btn-kill" data-pid="${hasPID[1]}" data-name="${f.title}">⛔ Kill Process</button>`;
+            }
+            if (hasFile) {
+                const filePath = hasFile[1].trim();
+                actionsHtml += `<button class="finding-action-btn btn-quarantine" data-path="${filePath}" data-name="${f.title}">🔒 Quarantine</button>`;
+            }
+            actionsHtml += `<button class="finding-action-btn btn-whitelist" data-id="${f.id}" data-name="${f.title}">✓ Whitelist</button>`;
+            actionsHtml += '</div>';
+
+            card.innerHTML = `
+                <div class="finding-header">
+                    <span class="sev-badge ${f.severity}">${f.severity}</span>
+                    <span class="finding-id">${f.id}</span>
+                </div>
+                <div class="finding-title">${f.title}</div>
+                <div class="finding-detail">${f.detail}</div>
+                <div class="finding-recommendation">${f.recommendation}</div>
+                ${actionsHtml}
+            `;
+
+            // Kill process button
+            const killBtn = card.querySelector('.btn-kill');
+            if (killBtn) {
+                killBtn.addEventListener('click', async () => {
+                    const pid = parseInt(killBtn.dataset.pid);
+                    const name = killBtn.dataset.name;
+                    const confirmed = await aegisConfirm({
+                        title: `Terminate ${name}`,
+                        bodyHtml: `
+                            <span class="confirm-label">Process</span>
+                            <span class="confirm-value">${name} (PID ${pid})</span>
+                        `,
+                        icon: '⬡',
+                        danger: false
+                    });
+                    if (!confirmed) return;
+                    try {
+                        await aegis.post('/api/defense/sentinel/kill', { pid });
+                        killBtn.textContent = '✓ Killed';
+                        killBtn.className = 'finding-action-btn btn-done';
+                    } catch (e) {
+                        killBtn.textContent = '✗ Failed';
+                    }
+                });
+            }
+
+            // Quarantine button
+            const quarBtn = card.querySelector('.btn-quarantine');
+            if (quarBtn) {
+                quarBtn.addEventListener('click', async () => {
+                    const filePath = quarBtn.dataset.path;
+                    const name = quarBtn.dataset.name;
+                    const confirmed = await aegisConfirm({
+                        title: `Quarantine File`,
+                        bodyHtml: `
+                            <span class="confirm-label">Finding</span>
+                            <span class="confirm-value">${name}</span>
+                            <span class="confirm-label">File</span>
+                            <span class="confirm-value">${filePath}</span>
+                            <span class="confirm-label">Destination</span>
+                            <span class="confirm-value">quarantine/</span>
+                        `,
+                        icon: '🔒',
+                        danger: false
+                    });
+                    if (!confirmed) return;
+                    try {
+                        await aegis.post('/api/scanner/quarantine', { path: filePath });
+                        quarBtn.textContent = '✓ Quarantined';
+                        quarBtn.className = 'finding-action-btn btn-done';
+                    } catch (e) {
+                        quarBtn.textContent = '✗ Failed';
+                    }
+                });
+            }
+
+            // Whitelist button
+            const wlBtn = card.querySelector('.btn-whitelist');
+            if (wlBtn) {
+                wlBtn.addEventListener('click', () => {
+                    card.style.opacity = '0.3';
+                    card.style.pointerEvents = 'none';
+                    wlBtn.textContent = '✓ Whitelisted';
+                });
+            }
+
+            list.appendChild(card);
+        });
+    }
+
+    async function runThreatScan() {
+        if (scanCooldown) return;
+        scanCooldown = true;
+
+        const btn = document.getElementById('run-scan-btn');
+        btn.classList.add('scanning');
+        btn.textContent = '⛨ Scanning...';
+
+        try {
+            const scanData = await aegis.get('/api/threats/scan');
+            lastScanData = scanData;
+
+            updateScoreGauge(scanData.score);
+            renderFindings(scanData.findings);
+            updatePostureMini();  // Instantly update Overview posture badge
+            loadScanHistory();    // Refresh history
+
+            document.getElementById('threat-detail').textContent =
+                `${scanData.total_findings} findings • ${scanData.scan_time_ms}ms`;
+            document.getElementById('scan-time').textContent =
+                `Last scan: ${new Date().toLocaleTimeString()}`;
+            document.getElementById('scan-duration').textContent =
+                `${scanData.scan_time_ms}ms`;
+
+            // Notifications — send if critical/high and window not visible
+            if (scanData.findings && scanData.findings.length > 0) {
+                const critCount = scanData.findings.filter(f => f.severity === 'critical').length;
+                const highCount = scanData.findings.filter(f => f.severity === 'high').length;
+                if (critCount + highCount > 0) {
+                    const notifEnabled = document.getElementById('setting-notifications')?.checked;
+                    if (notifEnabled) {
+                        const isVis = await aegis.isWindowVisible();
+                        if (!isVis) {
+                            aegis.notify(
+                                `⚠ ${critCount + highCount} Threat${critCount + highCount > 1 ? 's' : ''} Detected`,
+                                `${critCount > 0 ? critCount + ' CRITICAL' : ''}${critCount > 0 && highCount > 0 ? ', ' : ''}${highCount > 0 ? highCount + ' HIGH' : ''} — click to review`
+                            );
+                        }
+                    }
+                }
+            }
+
+            if (scanData.findings.length > 0 || true) {
+                document.getElementById('ai-narrative').innerHTML =
+                    '<p class="narrative-placeholder ai-typing">Analyzing with AI...</p>';
+
+                const aiResult = await aegis.post('/api/ai/analyze', {
+                    findings: scanData.findings
+                });
+                if (aiResult && aiResult.narrative) {
+                    // Render with line breaks — narrative has bullets and paragraphs
+                    const escaped = aiResult.narrative
+                        .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+                        .replace(/\n/g, '<br>');
+                    document.getElementById('ai-narrative').innerHTML = escaped;
+                    // Store narrative for PDF export
+                    lastScanData.ai_narrative = aiResult.narrative;
+                } else {
+                    document.getElementById('ai-narrative').innerHTML =
+                        `<p class="narrative-placeholder">${scanData.total_findings === 0
+                            ? '✓ Your system looks clean. No malware, spyware, or suspicious activity detected.'
+                            : 'AI analysis unavailable right now. Review the findings list below.'}</p>`;
+                }
+            }
+
+            // Run correlation engine after scan
+            try {
+                await runCorrelation(scanData.findings);
+            } catch (e) {
+                console.warn('Correlation engine error:', e);
+            }
+        } catch (e) {
+            console.error('Scan error:', e);
+            document.getElementById('ai-narrative').innerHTML =
+                '<p class="narrative-placeholder">Scan error — check backend connection.</p>';
+        } finally {
+            btn.classList.remove('scanning');
+            btn.textContent = '⛨ Run Full Scan';
+            setTimeout(() => { scanCooldown = false; }, 5000);
+        }
+    }
+
+    // ── PDF Export ──
+    async function exportReport() {
+        if (!lastScanData || !lastScanData.findings) {
+            return;
+        }
+        const exportBtn = document.getElementById('export-report-btn');
+        exportBtn.disabled = true;
+        exportBtn.textContent = '📄 Generating...';
+
+        try {
+            const reportData = {
+                findings: lastScanData.findings,
+                score: lastScanData.score,
+                ai_narrative: lastScanData.ai_narrative || '',
+                scan_duration_ms: lastScanData.scan_time_ms || 0,
+                project_name: 'System Threat Scan',
+            };
+            const result = await aegis.exportPDF(reportData);
+            if (result.success) {
+                exportBtn.textContent = '✓ Exported';
+                setTimeout(() => { exportBtn.textContent = '📄 Export Report'; exportBtn.disabled = false; }, 3000);
+            } else {
+                exportBtn.textContent = '✗ Failed';
+                console.error('Export failed:', result.error);
+                setTimeout(() => { exportBtn.textContent = '📄 Export Report'; exportBtn.disabled = false; }, 3000);
+            }
+        } catch (e) {
+            console.error('Export error:', e);
+            exportBtn.textContent = '📄 Export Report';
+            exportBtn.disabled = false;
+        }
+    }
+
+    // ── Correlation Engine ──
+    async function runCorrelation(threatFindings) {
+        const panel = document.getElementById('correlation-panel');
+        const summaryEl = document.getElementById('correlation-summary');
+        const listEl = document.getElementById('correlation-list');
+        const countEl = document.getElementById('correlation-count');
+        if (!panel || !summaryEl || !listEl) return;
+
+        try {
+            const result = await aegis.post('/api/correlate', {
+                threat_findings: threatFindings || [],
+                project_findings: window._lastProjectFindings || [],
+            });
+
+            const totalLinks = (result.links || []).length;
+            const persistentCount = (result.persistent_findings || []).length;
+
+            if (totalLinks === 0 && persistentCount === 0) {
+                panel.style.display = 'none';
+                return;
+            }
+
+            panel.style.display = '';
+            countEl.textContent = totalLinks + persistentCount;
+
+            // Summary stats
+            const s = result.summary || {};
+            summaryEl.innerHTML = `
+                ${s.process_links ? `<span class="correlation-stat">🔄 ${s.process_links} Process</span>` : ''}
+                ${s.network_links ? `<span class="correlation-stat">🌐 ${s.network_links} Network</span>` : ''}
+                ${s.code_links ? `<span class="correlation-stat">📂 ${s.code_links} Code</span>` : ''}
+                ${persistentCount ? `<span class="correlation-stat">⚠ ${persistentCount} Persistent</span>` : ''}
+            `;
+
+            // Render links
+            let html = '';
+            for (const link of (result.links || [])) {
+                const typeClass = link.source_type === 'process' ? 'process' :
+                                  link.source_type === 'connection' ? 'network' : 'code';
+                html += `<div class="correlation-link">
+                    <span class="correlation-link-type ${typeClass}">${link.source_type}</span>
+                    <span class="correlation-link-reason">${link.reason}</span>
+                    <span class="correlation-link-confidence">${(link.confidence * 100).toFixed(0)}%</span>
+                </div>`;
+            }
+
+            // Render persistent findings
+            for (const pf of (result.persistent_findings || [])) {
+                const badgeClass = pf.status === 'persistent' ? '' : 'recurring';
+                html += `<div class="correlation-link">
+                    <span class="persistence-badge ${badgeClass}">⚠ ${pf.status}</span>
+                    <span class="correlation-link-reason">${pf.finding_title} — seen in ${pf.scan_count} scans since ${pf.first_seen || 'unknown'}</span>
+                </div>`;
+            }
+
+            listEl.innerHTML = html;
+        } catch (e) {
+            console.warn('Correlation error:', e);
+            panel.style.display = 'none';
+        }
+    }
+
+    async function askAegis() {
+        const input = document.getElementById('ask-input');
+        const question = input.value.trim();
+        if (!question) return;
+
+        const history = document.getElementById('ask-history');
+
+        const userMsg = document.createElement('div');
+        userMsg.className = 'ask-msg user-msg';
+        userMsg.textContent = question;
+        history.appendChild(userMsg);
+
+        input.value = '';
+
+        const loadingMsg = document.createElement('div');
+        loadingMsg.className = 'ask-msg ai-msg ai-typing';
+        loadingMsg.textContent = 'Analyzing...';
+        history.appendChild(loadingMsg);
+        history.scrollTop = history.scrollHeight;
+
+        try {
+            const result = await aegis.post('/api/ai/ask', {
+                question,
+                system_state: lastScanData
+            });
+
+            loadingMsg.classList.remove('ai-typing');
+            loadingMsg.textContent = result.answer || 'Unable to analyze. Is Ollama running?';
+        } catch (e) {
+            loadingMsg.classList.remove('ai-typing');
+            loadingMsg.textContent = 'Error connecting to AI engine.';
+        }
+        history.scrollTop = history.scrollHeight;
+    }
+
+    async function checkAIStatus() {
+        try {
+            const status = await aegis.get('/api/ai/status');
+            const dot = document.getElementById('ai-dot');
+            const text = document.getElementById('ai-status-text');
+            if (status && status.ollama && status.ollama.healthy) {
+                dot.className = 'ai-dot online';
+                text.textContent = `AI: ${status.model} online`;
+            } else {
+                dot.className = 'ai-dot offline';
+                text.textContent = 'AI: offline — start Ollama';
+            }
+        } catch (e) {
+            document.getElementById('ai-dot').className = 'ai-dot offline';
+            document.getElementById('ai-status-text').textContent = 'AI: unavailable';
+        }
+    }
+
+    async function loadScanHistory() {
+        try {
+            const data = await aegis.get('/api/threats/history?limit=15');
+            const el = document.getElementById('scan-history-list');
+            if (!el) return;
+            if (!data.history || data.history.length === 0) {
+                el.innerHTML = '<p class="findings-placeholder">No scan history yet.</p>';
+                return;
+            }
+            el.innerHTML = data.history.map(s => {
+                const scoreClass = s.score >= 90 ? 'clean' : s.score >= 70 ? 'guarded' : s.score >= 50 ? 'elevated' : 'critical';
+                const ts = s.timestamp ? new Date(s.timestamp).toLocaleString() : '—';
+                const counts = [];
+                if (s.critical > 0) counts.push(`${s.critical}C`);
+                if (s.high > 0) counts.push(`${s.high}H`);
+                if (s.medium > 0) counts.push(`${s.medium}M`);
+                if (s.low > 0) counts.push(`${s.low}L`);
+                return `
+                    <div class="scan-history-row" data-scan-id="${s.id}">
+                        <div class="scan-history-score ${scoreClass}">${s.score}</div>
+                        <div class="scan-history-meta">
+                            <span class="scan-history-time">${ts}</span>
+                            <span class="scan-history-counts">${counts.length > 0 ? counts.join(' · ') : '✓ clean'}</span>
+                        </div>
+                        <span class="scan-history-duration">${s.duration_ms}ms</span>
+                    </div>
+                `;
+            }).join('');
+        } catch (e) {
+            console.error('Scan history error:', e);
+        }
+    }
+
+    // Defense system handlers
+    const DEFENSE_ACTIONS = {
+        'shield-engage':      { method: 'post', url: '/api/defense/shield/engage', target: 'shield-status' },
+        'shield-disengage':   { method: 'post', url: '/api/defense/shield/disengage', target: 'shield-status' },
+        'trap-activate':      { method: 'post', url: '/api/defense/trap/activate', target: 'trap-status' },
+        'trap-deactivate':    { method: 'post', url: '/api/defense/trap/deactivate', target: 'trap-status' },
+        'mirror-activate':    { method: 'post', url: '/api/defense/mirror/activate', target: 'mirror-status' },
+        'mirror-deactivate':  { method: 'post', url: '/api/defense/mirror/deactivate', target: 'mirror-status' },
+        'sentinel-activate':  { method: 'post', url: '/api/defense/sentinel/activate', target: 'sentinel-status' },
+        'sentinel-deactivate':{ method: 'post', url: '/api/defense/sentinel/deactivate', target: 'sentinel-status' },
+    };
+
+    document.querySelectorAll('.defense-btn').forEach(btn => {
+        btn.addEventListener('click', async () => {
+            const action = btn.dataset.action;
+            const config = DEFENSE_ACTIONS[action];
+            if (!config) return;
+
+            try {
+                const result = await aegis.post(config.url, {});
+                updateDefenseStatus();
+                // Snapshot defense state if persistence is enabled
+                if (typeof persistSettings === 'function') {
+                    setTimeout(persistSettings, 1000);
+                }
+            } catch (e) {
+                console.error(`Defense action ${action} failed:`, e);
+            }
+        });
+    });
+
+    async function updateDefenseStatus() {
+        try {
+            const status = await aegis.get('/api/defense/status');
+            if (!status) return;
+
+            const modules = {
+                'aegis_shield': 'shield-status',
+                'shadow_trap': 'trap-status',
+                'mirror_gate': 'mirror-status',
+                'sentinel': 'sentinel-status'
+            };
+
+            for (const [key, elId] of Object.entries(modules)) {
+                const el = document.getElementById(elId);
+                if (el && status[key]) {
+                    const isActive = status[key].active;
+                    el.textContent = isActive ? 'ACTIVE' : 'OFFLINE';
+                    el.className = 'defense-status' + (isActive ? ' active' : '');
+                }
+            }
+
+            if (status.shadow_trap) {
+                const el = document.getElementById('trap-detections');
+                if (el) el.textContent = `${(status.shadow_trap.detections || []).length} detections`;
+            }
+            if (status.mirror_gate) {
+                const el = document.getElementById('mirror-captures');
+                if (el) el.textContent = `${(status.mirror_gate.captures || []).length} captures`;
+            }
+        } catch (e) {
+            console.error('Defense status error:', e);
+        }
+    }
+
+    // Scan button
+    const scanBtn = document.getElementById('run-scan-btn');
+    if (scanBtn) scanBtn.addEventListener('click', runThreatScan);
+
+    // Export report button
+    const exportBtn = document.getElementById('export-report-btn');
+    if (exportBtn) exportBtn.addEventListener('click', exportReport);
+
+    // Ask button + Enter key
+    const askBtn = document.getElementById('ask-btn');
+    const askInput = document.getElementById('ask-input');
+    if (askBtn) askBtn.addEventListener('click', askAegis);
+    if (askInput) {
+        askInput.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') askAegis();
+        });
+    }
+
+    // Auto-scan toggle — synced with settings
+    let autoScanIntervalMs = 300000; // default 5 min
+    const autoToggle = document.getElementById('auto-scan-toggle');
+    if (autoToggle) {
+        autoToggle.addEventListener('change', () => {
+            const settingsAutoScan = document.getElementById('setting-auto-scan');
+            if (settingsAutoScan) settingsAutoScan.checked = autoToggle.checked;
+            if (autoToggle.checked) {
+                autoScanTimer = setInterval(runThreatScan, autoScanIntervalMs);
+            } else {
+                if (autoScanTimer) clearInterval(autoScanTimer);
+                autoScanTimer = null;
+            }
+            persistSettings();
+        });
+    }
+
+    // ═══════════════════════════════════════════
+    // PERFORMANCE TAB
+    // ═══════════════════════════════════════════
+    async function updatePerfMetrics() {
+        try {
+            const data = await aegis.get('/api/performance/status');
+            if (data.error) return;
+
+            // CPU metrics
+            const cpu = data.cpu || {};
+            const el = (id, val) => { const e = document.getElementById(id); if (e) e.textContent = val; };
+            el('perf-cpu-freq', cpu.current_mhz ? Math.round(cpu.current_mhz) + ' MHz' : '--');
+            el('perf-cpu-max', cpu.max_mhz ? Math.round(cpu.max_mhz) + ' MHz' : '--');
+            el('perf-cpu-load', cpu.avg_percent != null ? cpu.avg_percent.toFixed(1) + '%' : '--');
+            el('perf-cpu-cores', cpu.cores_physical ? cpu.cores_physical + 'P+' + (cpu.cores_logical - cpu.cores_physical) + 'E' : '--');
+
+            // CPU temp
+            if (cpu.temperatures) {
+                const temps = Object.values(cpu.temperatures);
+                if (temps.length > 0) {
+                    const maxTemp = Math.max(...temps.map(t => t.current || 0));
+                    el('perf-cpu-temp', maxTemp > 0 ? maxTemp + '°C' : '--');
+                } else {
+                    el('perf-cpu-temp', '--');
+                }
+            }
+
+            // GPU metrics
+            const gpu = data.gpu || {};
+            el('perf-gpu-clock', gpu.clock_mhz ? Math.round(gpu.clock_mhz) + ' MHz' : '--');
+            el('perf-gpu-mem', gpu.mem_clock_mhz ? Math.round(gpu.mem_clock_mhz) + ' MHz' : '--');
+            el('perf-gpu-power', gpu.power_draw_w ? gpu.power_draw_w.toFixed(1) + ' W' : '--');
+            el('perf-gpu-temp', gpu.temperature_c ? gpu.temperature_c + '°C' : '--');
+            el('perf-gpu-fan', gpu.fan_speed_percent != null ? gpu.fan_speed_percent + '%' : '--');
+            if (gpu.vram_used_mb && gpu.vram_total_mb) {
+                el('perf-gpu-vram', Math.round(gpu.vram_used_mb) + ' / ' + Math.round(gpu.vram_total_mb) + ' MB');
+            }
+
+            // System mode indicator (Idle / Work / Heavy Load)
+            const cpuPct = cpu.avg_percent || 0;
+            const gpuPct = gpu.gpu_util_percent || 0;
+            const modeEl = document.getElementById('system-mode');
+            if (modeEl) {
+                if (cpuPct > 60 || gpuPct > 50) {
+                    modeEl.textContent = '⚠ Heavy Load';
+                    modeEl.className = 'system-mode-badge heavy';
+                } else if (cpuPct > 15 || gpuPct > 10) {
+                    modeEl.textContent = '⚡ Work';
+                    modeEl.className = 'system-mode-badge work';
+                } else {
+                    modeEl.textContent = '💤 Idle';
+                    modeEl.className = 'system-mode-badge idle';
+                }
+            }
+        } catch (e) { console.warn('perf metrics:', e); }
+    }
+
+    async function updateVPNStatus() {
+        try {
+            const data = await aegis.get('/api/vpn/status');
+            const indicator = document.getElementById('vpn-indicator');
+            const label = document.getElementById('vpn-label');
+            const statusText = document.getElementById('vpn-status-text');
+            const detailEl = document.getElementById('vpn-detail');
+            const ipEl = document.getElementById('vpn-ip');
+
+            const provider = data.provider || 'VPN';
+
+            if (data.connected) {
+                if (indicator) indicator.className = 'vpn-indicator connected';
+                if (label) label.textContent = provider;
+                if (statusText) statusText.textContent = 'Connected';
+
+                // Build detail string: protocol + tunnel IP
+                let details = [];
+                if (data.protocol) details.push(data.protocol);
+                if (data.tunnel_ip) details.push('Tunnel: ' + data.tunnel_ip);
+                if (detailEl) detailEl.textContent = details.length ? details.join(' · ') : '';
+
+                if (ipEl) ipEl.textContent = data.public_ip ? 'IP: ' + data.public_ip : '';
+            } else {
+                if (indicator) indicator.className = 'vpn-indicator';
+                // Show provider name if services running but not connected
+                if (label) label.textContent = data.services && data.services.length > 0 ? provider : 'VPN';
+                if (statusText) statusText.textContent = data.services && data.services.length > 0 ? 'Not Connected' : 'Disconnected';
+                if (detailEl) detailEl.textContent = '';
+                if (ipEl) ipEl.textContent = '';
+            }
+        } catch (e) { console.warn('vpn status:', e); }
+    }
+
+    async function loadTuningState() {
+        try {
+            const [profilesData, stateData, historyData] = await Promise.all([
+                aegis.get('/api/tuning/profiles'),
+                aegis.get('/api/tuning/state'),
+                aegis.get('/api/tuning/history'),
+            ]);
+            renderTuningProfiles(profilesData.profiles || {});
+            renderTuningSubsystems(stateData || {});
+            renderTuningReceipts(historyData.receipts || []);
+        } catch (e) { console.warn('tuning state:', e); }
+    }
+
+    function renderTuningProfiles(profiles) {
+        const grid = document.getElementById('tuning-profiles-grid');
+        if (!grid) return;
+
+        let html = '';
+        for (const [key, p] of Object.entries(profiles)) {
+            const canApply = p.can_apply;
+            const cls = canApply ? '' : 'disabled';
+            html += '<div class="tuning-profile-card ' + cls + '" data-profile="' + key + '">';
+            html += '<span class="tuning-profile-icon">' + (p.icon || '⚙️') + '</span>';
+            html += '<div class="tuning-profile-name">' + (p.name || key) + '</div>';
+            html += '<div class="tuning-profile-desc">' + (p.description || '') + '</div>';
+
+            // Readiness indicators
+            if (p.readiness) {
+                html += '<div style="margin-top:8px;">';
+                for (const [sub, status] of Object.entries(p.readiness)) {
+                    const dot = status === 'READY' ? '🟢' : status === 'NOT_RUNNING' ? '🟡' : '⚫';
+                    html += '<span style="font-size:0.8em;margin-right:5px;" title="' + sub + ': ' + status + '">' + dot + '</span>';
+                }
+                html += '</div>';
+            }
+
+            // Target values
+            if (p.targets) {
+                html += '<div style="margin-top:8px;text-align:left;padding:6px 8px;background:rgba(0,0,0,0.2);border-radius:6px;">';
+                for (const [tk, tv] of Object.entries(p.targets)) {
+                    html += '<div style="font-size:0.72em;color:var(--text-muted);line-height:1.6;">';
+                    html += '<span style="color:var(--text-secondary);">' + tk.replace(/_/g, ' ') + ':</span> ';
+                    html += '<span style="color:var(--text-primary);font-family:JetBrains Mono,monospace;">' + tv + '</span>';
+                    html += '</div>';
+                }
+                html += '</div>';
+            }
+
+            html += '</div>';
+        }
+        grid.innerHTML = html;
+
+        // Bind click handlers
+        grid.querySelectorAll('.tuning-profile-card:not(.disabled)').forEach(card => {
+            card.addEventListener('click', () => {
+                const profile = card.getAttribute('data-profile');
+                applyTuningProfile(profile);
+            });
+        });
+    }
+
+    function renderTuningSubsystems(state) {
+        const container = document.getElementById('tuning-subsystems');
+        if (!container) return;
+
+        const subsystems = [
+            { key: 'cpu', label: 'CPU', icon: '🔷' },
+            { key: 'gpu', label: 'GPU', icon: '🟩' },
+            { key: 'fan', label: 'FAN / MODE', icon: '🌀' },
+        ];
+
+        let html = '';
+        for (const sub of subsystems) {
+            const data = state[sub.key] || {};
+            const status = (data.status || 'UNKNOWN').toLowerCase();
+            const statusClass = status.replace('_', '-');
+
+            html += '<div class="tuning-sub-card">';
+            html += '<div class="tuning-sub-header">';
+            html += '<span class="tuning-sub-title">' + sub.icon + ' ' + sub.label + '</span>';
+            html += '<span class="tuning-status ' + statusClass + '">' + (data.status || 'UNKNOWN') + '</span>';
+            html += '</div>';
+            html += '<div class="tuning-sub-provider">' + (data.provider || '—') + '</div>';
+
+            // Subsystem-specific values
+            html += '<div class="tuning-sub-values">';
+            if (sub.key === 'gpu' && data.gpu_telemetry) {
+                const g = data.gpu_telemetry;
+                if (g.temp_c != null) html += '<div><span class="t-key">Temp</span><span class="t-val">' + g.temp_c + '°C</span></div>';
+                if (g.clock_mhz != null) html += '<div><span class="t-key">Clock</span><span class="t-val">' + g.clock_mhz + ' MHz</span></div>';
+                if (g.power_draw_w != null) html += '<div><span class="t-key">Power</span><span class="t-val">' + g.power_draw_w + ' W</span></div>';
+                if (g.vram_used_mb != null) html += '<div><span class="t-key">VRAM</span><span class="t-val">' + Math.round(g.vram_used_mb) + ' / ' + Math.round(g.vram_total_mb || 0) + ' MB</span></div>';
+            } else if (sub.key === 'cpu' && data.cpu_telemetry) {
+                const c = data.cpu_telemetry;
+                if (c.current_mhz) html += '<div><span class="t-key">Clock</span><span class="t-val">' + c.current_mhz + ' MHz</span></div>';
+                if (c.percent != null) html += '<div><span class="t-key">Load</span><span class="t-val">' + c.percent + '%</span></div>';
+            } else if (sub.key === 'fan' && data.scenario) {
+                const s = data.scenario;
+                html += '<div><span class="t-key">Mode</span><span class="t-val">' + (s.mode || 'unknown') + '</span></div>';
+                if (s.source) html += '<div><span class="t-key">Source</span><span class="t-val">' + s.source + '</span></div>';
+            }
+
+            if (data.message) {
+                html += '<div style="margin-top:4px;font-size:0.88em;color:var(--text-muted);font-style:italic;">' + data.message + '</div>';
+            }
+            html += '</div>';
+
+            // Action buttons
+            html += '<div class="tuning-actions">';
+            html += '<button class="tuning-btn" onclick="document.dispatchEvent(new CustomEvent(\'tuning-verify\'))">Verify</button>';
+            html += '<button class="tuning-btn danger" onclick="document.dispatchEvent(new CustomEvent(\'tuning-revert\'))">Revert</button>';
+            html += '</div>';
+
+            html += '</div>';
+        }
+        container.innerHTML = html;
+    }
+
+    function renderTuningReceipts(receipts) {
+        const container = document.getElementById('tuning-receipts');
+        if (!container) return;
+
+        if (!receipts.length) {
+            container.innerHTML = '<div style="color:var(--text-muted);font-size:0.85em;">No actions recorded</div>';
+            return;
+        }
+
+        let html = '';
+        for (const r of receipts.slice(-10).reverse()) {
+            const action = r.action === 'REVERT' ? '↩ Revert' : '⚡ ' + (r.profile_label || r.profile || 'Apply');
+            const time = r.timestamp ? new Date(r.timestamp).toLocaleTimeString() : '—';
+            const logClass = r.status === 'rollback' ? 'color:#e74c3c;' : 'color:var(--gold);';
+            const confStr = r.confidence !== undefined ? ` (Conf: ${(r.confidence*100).toFixed(0)}%)` : '';
+            
+            html += '<div class="tuning-receipt-item" style="border-bottom:1px solid rgba(255,255,255,0.05); padding-bottom:10px; margin-bottom:10px;">';
+            html += '<div style="display:flex; justify-content:space-between; margin-bottom:6px;">';
+            html += '<span class="receipt-action" style="' + logClass + '">' + action + confStr + '</span>';
+            html += '<span class="receipt-time">' + time + '</span>';
+            html += '</div>';
+
+            // Render deterministic logs if they exist
+            if (r.logs && Array.isArray(r.logs)) {
+                html += '<div style="font-family:monospace; font-size:0.8em; color:var(--text-muted); padding-left:10px; border-left:1px solid rgba(255,255,255,0.1);">';
+                r.logs.forEach(logLine => {
+                    const color = logLine.includes('[!]') || logLine.includes('Rollback') ? '#e74c3c' : 'rgba(255,255,255,0.5)';
+                    html += `<div style="color:${color}; margin-top:3px;">> ${logLine}</div>`;
+                });
+                html += '</div>';
+            }
+            html += '</div>';
+        }
+        container.innerHTML = html;
+    }
+
+    async function applyTuningProfile(profileName) {
+        // Branded VERITAS confirm modal
+        const confirmed = await aegisConfirm({
+            title: 'Apply System Profile',
+            icon: '⚡',
+            bodyHtml: `
+                <span class="confirm-label">Profile</span>
+                <span class="confirm-value">${profileName.toUpperCase()}</span>
+                <span class="confirm-label">Subsystems</span>
+                <span class="confirm-value">CPU · GPU · Fan Control</span>
+                <span class="confirm-label">Safety</span>
+                <span class="confirm-value">Baseline will be captured for rollback</span>
+            `,
+            okText: 'Apply Profile'
+        });
+        if (!confirmed) return;
+
+        try {
+            // UI visual lock state navigating the multi-phase boundary
+            const btn = document.querySelector(`.tuning-profile-card[data-profile="${profileName}"]`);
+            if (btn) btn.classList.add('scanning');
+            
+            const overlay = document.createElement('div');
+            overlay.className = 'aegis-confirm-overlay open';
+            overlay.style.zIndex = '9999';
+            overlay.innerHTML = `
+                <div class="aegis-confirm-box" style="text-align:center; min-height: 180px; display:flex; flex-direction:column; justify-content:center;">
+                    <h3 style="color:var(--gold); margin:0 0 15px 0; font-size:1.3em; letter-spacing:2px;" id="tuning-phase-text">[PHASE 1: PRE-FLIGHT]</h3>
+                    <div style="color:var(--text-muted); font-family:'JetBrains Mono',monospace; font-size:0.9em;" id="tuning-phase-sub">Validating EC & Thermal Bounds...</div>
+                </div>
+            `;
+            document.body.appendChild(overlay);
+
+            setTimeout(() => {
+                const el = document.getElementById('tuning-phase-text');
+                if (el) {
+                    el.innerText = '[PHASE 2: COMMITTING STATE]';
+                    document.getElementById('tuning-phase-sub').innerText = 'Injecting parameters...';
+                }
+            }, 800);
+
+            setTimeout(() => {
+                const el = document.getElementById('tuning-phase-text');
+                if (el) {
+                    el.innerText = '[PHASE 3: VERIFYING TARGET]';
+                    document.getElementById('tuning-phase-sub').innerText = 'Polling hardware stability limiters (5s)...';
+                }
+            }, 2000);
+
+            const result = await aegis.post('/api/tuning/apply-profile', { profile: profileName });
+            
+            overlay.remove();
+            if (btn) btn.classList.remove('scanning');
+
+            if (result.blocked_by === 'SAFETY_GATE') {
+                await aegisConfirm({
+                    title: 'BLOCKED BY SAFETY GATE',
+                    icon: '⛔',
+                    danger: true,
+                    bodyHtml: `<span class="confirm-warning">${(result.issues || []).join('<br>')}</span>`,
+                    okText: 'Understood'
+                });
+                return;
+            }
+            
+            if (result.status === 'rollback') {
+                aegis.notify('Tuning Rolled Back', 'Hardware rejected state bounds. System safely reverted.');
+            } else {
+                const confPct = ((result.confidence || 0) * 100).toFixed(1);
+                aegis.notify('Tuning Locked', `Profile verified with ${confPct}% confidence.`);
+            }
+
+            loadTuningState();
+        } catch (e) {
+            console.error(e);
+            document.querySelectorAll('.aegis-confirm-overlay').forEach(el => el.remove());
+            document.querySelectorAll('.tuning-profile-card').forEach(el => el.classList.remove('scanning'));
+            await aegisConfirm({
+                title: 'Apply Failed',
+                icon: '⚠',
+                danger: true,
+                bodyHtml: `<span class="confirm-warning">${e.message}</span>`,
+                okText: 'Dismiss'
+            });
+        }
+    }
+
+    // Listen for verify/revert events
+    document.addEventListener('tuning-verify', async () => {
+        try {
+            await aegis.post('/api/tuning/verify');
+            loadTuningState();
+        } catch (e) { console.warn('verify:', e); }
+    });
+
+    document.addEventListener('tuning-revert', async () => {
+        const confirmed = await aegisConfirm({
+            title: 'Revert to Baseline',
+            icon: '↩',
+            bodyHtml: `
+                <span class="confirm-label">Action</span>
+                <span class="confirm-value">Undo most recent tuning change</span>
+                <span class="confirm-label">Effect</span>
+                <span class="confirm-value">CPU, GPU, and Fan profiles will be restored to previous state</span>
+            `,
+            okText: 'Revert'
+        });
+        if (!confirmed) return;
+        try {
+            await aegis.post('/api/tuning/revert');
+            setTimeout(loadTuningState, 1000);
+        } catch (e) {
+            await aegisConfirm({
+                title: 'Revert Failed',
+                icon: '⚠',
+                danger: true,
+                bodyHtml: `<span class="confirm-warning">${e.message}</span>`,
+                okText: 'Dismiss'
+            });
+        }
+    });
+
+
+
+    // ═══════════════════════════════════════════
+    // TAB-AWARE POLLING ENGINE
+    // ═══════════════════════════════════════════
+    let activeTab = 'overview';
+    let pollTimers = [];
+
+    const TAB_POLLS = {
+        overview: [
+            { fn: updateSystemStatus,      interval: 3000 },
+            { fn: updateQuickStats,        interval: 15000 },
+            { fn: updateWeather,           interval: 600000 },
+            { fn: updateNetworkThroughput, interval: 3000 },
+            { fn: updateTopProcs,          interval: 5000 },
+            { fn: updatePostureMini,       interval: 30000 },
+        ],
+        security: [
+            { fn: updateProcesses,    interval: 5000 },
+            { fn: updateNetwork,      interval: 10000 },
+            { fn: updatePorts,        interval: 15000 },
+            { fn: updateConnections,  interval: 15000 },
+            { fn: updateStartup,      interval: 120000 },
+        ],
+        hardware: [
+            { fn: updateGPU,          interval: 10000 },
+            { fn: updateCPU,          interval: 10000 },
+            { fn: updateMemory,       interval: 10000 },
+            { fn: updateBattery,      interval: 60000 },
+            { fn: updateDisks,        interval: 60000 },
+            { fn: updatePerfMetrics,  interval: 5000 },
+            { fn: updateVPNStatus,    interval: 10000 },
+            { fn: loadTuningState,    interval: 30000 },
+        ],
+        threats: [
+            { fn: checkAIStatus,      interval: 30000 },
+            { fn: updateDefenseStatus,interval: 30000 },
+            { fn: loadScanHistory,    interval: null },
+        ],
+        projects: [
+            { fn: loadProjects,       interval: null },
+        ],
+    };
+
+    function restartPolling() {
+        pollTimers.forEach(id => clearInterval(id));
+        pollTimers = [];
+
+        const polls = TAB_POLLS[activeTab] || [];
+        polls.forEach(p => {
+            p.fn();
+            if (p.interval) {
+                pollTimers.push(setInterval(p.fn, p.interval));
+            }
+        });
+    }
+
+    // Initial load
+    restartPolling();
+
+    // Projects — load once on first visit
+    let projectsLoaded = false;
+    tabBtns.forEach(btn => {
+        btn.addEventListener('click', () => {
+            if (btn.dataset.tab === 'projects' && !projectsLoaded) {
+                loadProjects();
+                projectsLoaded = true;
+            }
+        });
+    });
+
+    // Threats — initial state on first visit
+    let threatsInitialized = false;
+    tabBtns.forEach(btn => {
+        btn.addEventListener('click', () => {
+            if (btn.dataset.tab === 'threats' && !threatsInitialized) {
+                checkAIStatus();
+                updateDefenseStatus();
+                threatsInitialized = true;
+            }
+        });
+    });
+
+    // Hardware tab — load profiles on first visit + tuning dropdown toggle
+    let perfInitialized = false;
+    tabBtns.forEach(btn => {
+        btn.addEventListener('click', () => {
+            if (btn.dataset.tab === 'hardware' && !perfInitialized) {
+                loadTuningState();
+                perfInitialized = true;
+            }
+        });
+    });
+
+    // Tuning profiles dropdown toggle
+    const tuningToggle = document.getElementById('hw-tuning-toggle');
+    if (tuningToggle) {
+        tuningToggle.addEventListener('click', () => {
+            const body = document.getElementById('hw-tuning-body');
+            const dropdown = tuningToggle.closest('.hw-tuning-dropdown');
+            if (body && dropdown) {
+                dropdown.classList.toggle('open');
+            }
+        });
+    }
+
+
+    // ═══════════════════════════════════════════
+    // SETTINGS PANEL — FULL PERSISTENCE
+    // ═══════════════════════════════════════════
+    const settingsOverlay = document.getElementById('settings-overlay');
+    const settingsGear = document.getElementById('settings-gear');
+    const settingsClose = document.getElementById('settings-close');
+
+    // Persist all settings to aegis-settings.json via Electron IPC
+    async function persistSettings() {
+        const s = {
+            weatherLocation: weatherLocation,
+            pollIntervalSec: parseInt(document.getElementById('setting-poll-interval')?.value || '3'),
+            autoScan: document.getElementById('setting-auto-scan')?.checked || false,
+            scanIntervalMin: parseInt(document.getElementById('setting-scan-interval')?.value || '5'),
+            scanOnLaunch: document.getElementById('setting-scan-on-launch')?.checked || false,
+            defensePersist: document.getElementById('setting-defense-persist')?.checked || false,
+            layoutLocked: document.getElementById('setting-layout-locked')?.checked ?? true,
+            reduceEffects: document.getElementById('setting-reduce-effects')?.checked || false,
+            closeToTray: document.getElementById('setting-close-to-tray')?.checked || false,
+            notifications: document.getElementById('setting-notifications')?.checked || false,
+            autoStart: document.getElementById('setting-auto-start')?.checked || false,
+            backupChainDepth: parseInt(document.getElementById('setting-backup-depth')?.value || '3'),
+        };
+        // Also snapshot defense module states if persist is enabled
+        if (s.defensePersist) {
+            try {
+                const status = await aegis.get('/api/defense/status');
+                if (status) {
+                    s.defenseStates = {
+                        shield: status.aegis_shield?.active || false,
+                        trap: status.shadow_trap?.active || false,
+                        mirror: status.mirror_gate?.active || false,
+                        sentinel: status.sentinel?.active || false,
+                    };
+                }
+            } catch (e) { /* ok */ }
+        }
+        await aegis.saveSettings(s);
+    }
+
+    // Load and apply all settings from disk
+    async function loadPersistedSettings() {
+        let s;
+        try { s = await aegis.loadSettings(); } catch (e) { s = {}; }
+        if (!s || typeof s !== 'object') s = {};
+
+        // Weather
+        if (s.weatherLocation) {
+            weatherLocation = s.weatherLocation;
+            localStorage.setItem('aegis-weather-location', weatherLocation);
+            document.getElementById('weather-title').textContent = `Weather — ${weatherLocation}`;
+        }
+
+        // Polling interval
+        if (s.pollIntervalSec) {
+            const ms = s.pollIntervalSec * 1000;
+            const sysPoll = TAB_POLLS.overview.find(p => p.fn === updateSystemStatus);
+            const netPoll = TAB_POLLS.overview.find(p => p.fn === updateNetworkThroughput);
+            if (sysPoll) sysPoll.interval = ms;
+            if (netPoll) netPoll.interval = ms;
+            const pollSelect = document.getElementById('setting-poll-interval');
+            if (pollSelect) pollSelect.value = String(s.pollIntervalSec);
+        }
+
+        // Auto-scan
+        const autoScanCheck = document.getElementById('setting-auto-scan');
+        const autoScanToggleDOM = document.getElementById('auto-scan-toggle');
+        if (s.autoScan) {
+            if (autoScanCheck) autoScanCheck.checked = true;
+            if (autoScanToggleDOM) autoScanToggleDOM.checked = true;
+            autoScanIntervalMs = (s.scanIntervalMin || 5) * 60000;
+            autoScanTimer = setInterval(runThreatScan, autoScanIntervalMs);
+        }
+        if (s.scanIntervalMin) {
+            const scanIntSelect = document.getElementById('setting-scan-interval');
+            if (scanIntSelect) scanIntSelect.value = String(s.scanIntervalMin);
+        }
+
+        // Scan on launch
+        const scanOnLaunchCheck = document.getElementById('setting-scan-on-launch');
+        if (s.scanOnLaunch) {
+            if (scanOnLaunchCheck) scanOnLaunchCheck.checked = true;
+            // Delay scan slightly to let UI render first
+            setTimeout(runThreatScan, 3000);
+        }
+
+        // Defense persist
+        const defensePersistCheck = document.getElementById('setting-defense-persist');
+        if (s.defensePersist) {
+            if (defensePersistCheck) defensePersistCheck.checked = true;
+            // Re-engage defense modules that were active
+            if (s.defenseStates) {
+                const engage = async (url) => { try { await aegis.post(url, {}); } catch (e) { /* ok */ } };
+                if (s.defenseStates.shield) await engage('/api/defense/shield/engage');
+                if (s.defenseStates.trap) await engage('/api/defense/trap/activate');
+                if (s.defenseStates.mirror) await engage('/api/defense/mirror/activate');
+                if (s.defenseStates.sentinel) await engage('/api/defense/sentinel/activate');
+                setTimeout(updateDefenseStatus, 2000);
+            }
+        }
+
+        // Layout lock
+        const layoutLockedCheck = document.getElementById('setting-layout-locked');
+        if (s.layoutLocked === false) {
+            layoutLocked = false;
+            overviewGrid.classList.remove('locked');
+            if (layoutLockedCheck) layoutLockedCheck.checked = false;
+            const lmBtn = document.getElementById('layout-mode-btn');
+            if (lmBtn) {
+                lmBtn.textContent = '✎ Edit Layout';
+                lmBtn.classList.add('editing');
+            }
+        } else {
+            if (layoutLockedCheck) layoutLockedCheck.checked = true;
+        }
+
+        // Reduce effects
+        const reduceCheck = document.getElementById('setting-reduce-effects');
+        if (s.reduceEffects) {
+            if (reduceCheck) reduceCheck.checked = true;
+            document.body.classList.add('reduce-effects');
+        }
+
+        // Close to tray
+        const closeToTrayCheck = document.getElementById('setting-close-to-tray');
+        if (s.closeToTray && closeToTrayCheck) closeToTrayCheck.checked = true;
+
+        // Notifications
+        const notifCheck = document.getElementById('setting-notifications');
+        if (s.notifications && notifCheck) notifCheck.checked = true;
+
+        // Auto-start
+        const autoStartCheck = document.getElementById('setting-auto-start');
+        if (s.autoStart && autoStartCheck) autoStartCheck.checked = true;
+
+        // Backup chain depth
+        if (s.backupChainDepth) {
+            const depthSelect = document.getElementById('setting-backup-depth');
+            if (depthSelect) depthSelect.value = String(s.backupChainDepth);
+        }
+    }
+
+    function openSettings() {
+        settingsOverlay.classList.add('open');
+        // Populate current values
+        const locInput = document.getElementById('setting-weather-loc');
+        if (locInput) locInput.value = weatherLocation;
+
+        const pollSelect = document.getElementById('setting-poll-interval');
+        const currentInterval = (TAB_POLLS.overview.find(p => p.fn === updateSystemStatus) || {}).interval;
+        if (pollSelect && currentInterval) {
+            pollSelect.value = String(currentInterval / 1000);
+        }
+
+        // Sync layout lock checkbox with current state
+        const layoutLockedCheck = document.getElementById('setting-layout-locked');
+        if (layoutLockedCheck) layoutLockedCheck.checked = layoutLocked;
+
+        // Refresh dependency status when settings opens
+        updateDependencyStatus();
+    }
+
+    // ═══════════════════════════════════════
+    // DEPENDENCY LIFECYCLE MANAGEMENT
+    // ═══════════════════════════════════════
+    let _depPollTimer = null;
+
+    async function updateDependencyStatus() {
+        const grid = document.getElementById('dependency-status-grid');
+        if (!grid) return;
+
+        let data;
+        try {
+            data = await aegis.get('/api/lifecycle/status');
+            if (!data || data.error) throw new Error(data?.error || 'no data');
+        } catch (e) {
+            grid.innerHTML = '<div class="dep-loading">Could not reach lifecycle manager</div>';
+            return;
+        }
+
+        // Render order: managed first, then passive
+        const managed = ['ollama', 'throttlestop', 'afterburner'];
+        const passive = ['protonvpn', 'msicenter'];
+        const order = [...managed, ...passive];
+
+        let html = '';
+        for (const key of order) {
+            const dep = data[key];
+            if (!dep) continue;
+
+            const isManaged = managed.includes(key);
+            const indicatorClass = !dep.installed ? 'missing' : dep.running ? 'running' : 'stopped';
+            const statusText = !dep.installed ? 'Not installed'
+                : dep.running ? (dep.memory_mb > 0 ? `Running — <span class="dep-mem">${dep.memory_mb} MB</span>` : 'Running')
+                : 'Stopped';
+
+            let actionHtml = '';
+            if (isManaged && dep.installed) {
+                if (dep.running && dep.auto_stop) {
+                    actionHtml = `<button class="dep-action-btn running" data-dep="${key}" data-action="stop">Stop</button>`;
+                } else if (!dep.running) {
+                    actionHtml = `<button class="dep-action-btn" data-dep="${key}" data-action="start">Start</button>`;
+                } else if (dep.running && !dep.auto_stop) {
+                    // Running + not auto-stoppable (like Ollama) — show indicator only
+                    actionHtml = '<span class="dep-badge">Always On</span>';
+                }
+            } else if (!isManaged) {
+                actionHtml = `<span class="dep-badge system">${dep.note || 'System'}</span>`;
+            }
+
+            html += `
+                <div class="dep-row" data-dep-key="${key}">
+                    <div class="dep-indicator ${indicatorClass}"></div>
+                    <div class="dep-info">
+                        <div class="dep-name">${dep.name}</div>
+                        <div class="dep-meta">${statusText}</div>
+                    </div>
+                    ${actionHtml}
+                </div>`;
+        }
+
+        grid.innerHTML = html;
+
+        // Bind action buttons
+        grid.querySelectorAll('.dep-action-btn').forEach(btn => {
+            btn.addEventListener('click', async () => {
+                const dep = btn.dataset.dep;
+                const action = btn.dataset.action;
+                btn.classList.add('starting');
+                btn.textContent = action === 'start' ? 'Starting...' : 'Stopping...';
+                btn.disabled = true;
+
+                try {
+                    await aegis.post(`/api/lifecycle/${action}/${dep}`, {});
+                } catch (e) { /* ok */ }
+
+                // Refresh after brief delay
+                setTimeout(updateDependencyStatus, 2000);
+            });
+        });
+    }
+
+    function closeSettings() {
+        settingsOverlay.classList.remove('open');
+
+        // Save weather location
+        const locInput = document.getElementById('setting-weather-loc');
+        if (locInput && locInput.value.trim() && locInput.value.trim() !== weatherLocation) {
+            weatherLocation = locInput.value.trim();
+            document.getElementById('weather-title').textContent = `Weather — ${weatherLocation}`;
+            updateWeather();
+        }
+
+        // Save polling interval
+        const pollSelect = document.getElementById('setting-poll-interval');
+        if (pollSelect) {
+            const newInterval = parseInt(pollSelect.value) * 1000;
+            const sysPoll = TAB_POLLS.overview.find(p => p.fn === updateSystemStatus);
+            const netPoll = TAB_POLLS.overview.find(p => p.fn === updateNetworkThroughput);
+            if (sysPoll) sysPoll.interval = newInterval;
+            if (netPoll) netPoll.interval = newInterval;
+            if (activeTab === 'overview') restartPolling();
+        }
+
+        // Auto-scan sync
+        const autoScanCheck = document.getElementById('setting-auto-scan');
+        const autoScanToggleDOM = document.getElementById('auto-scan-toggle');
+        const scanIntSelect = document.getElementById('setting-scan-interval');
+        if (autoScanCheck && autoScanToggleDOM) {
+            autoScanToggleDOM.checked = autoScanCheck.checked;
+            autoScanIntervalMs = parseInt(scanIntSelect?.value || '5') * 60000;
+            if (autoScanCheck.checked) {
+                if (autoScanTimer) clearInterval(autoScanTimer);
+                autoScanTimer = setInterval(runThreatScan, autoScanIntervalMs);
+            } else {
+                if (autoScanTimer) clearInterval(autoScanTimer);
+                autoScanTimer = null;
+            }
+        }
+
+        // Layout lock sync
+        const layoutLockedCheck = document.getElementById('setting-layout-locked');
+        if (layoutLockedCheck) {
+            layoutLocked = layoutLockedCheck.checked;
+            if (layoutLocked) {
+                overviewGrid.classList.add('locked');
+                const lmBtn = document.getElementById('layout-mode-btn');
+                if (lmBtn) {
+                    lmBtn.textContent = '🔒 Locked';
+                    lmBtn.classList.remove('editing');
+                }
+            } else {
+                overviewGrid.classList.remove('locked');
+                const lmBtn = document.getElementById('layout-mode-btn');
+                if (lmBtn) {
+                    lmBtn.textContent = '✎ Edit Layout';
+                    lmBtn.classList.add('editing');
+                }
+            }
+        }
+
+        // Reduce effects sync
+        const reduceCheck = document.getElementById('setting-reduce-effects');
+        if (reduceCheck) {
+            if (reduceCheck.checked) {
+                document.body.classList.add('reduce-effects');
+            } else {
+                document.body.classList.remove('reduce-effects');
+            }
+        }
+
+        // Auto-start sync — tell Electron to register/unregister
+        const autoStartCheck = document.getElementById('setting-auto-start');
+        if (autoStartCheck) {
+            aegis.setAutoStart(autoStartCheck.checked);
+        }
+
+        // Backup chain depth — sync to backend
+        const depthSelect = document.getElementById('setting-backup-depth');
+        if (depthSelect) {
+            const depth = parseInt(depthSelect.value);
+            aegis.post('/api/scanner/config', { backup_chain_depth: depth });
+        }
+
+        // Persist everything to disk
+        persistSettings();
+    }
+
+    if (settingsGear) settingsGear.addEventListener('click', openSettings);
+    if (settingsClose) settingsClose.addEventListener('click', closeSettings);
+    if (settingsOverlay) {
+        settingsOverlay.addEventListener('click', (e) => {
+            if (e.target === settingsOverlay) closeSettings();
+        });
+    }
+
+    // Escape key closes settings
+    document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape' && settingsOverlay.classList.contains('open')) {
+            closeSettings();
+        }
+    });
+
+    // Settings quick actions (reuse existing handler)
+    settingsOverlay?.querySelectorAll('[data-action]').forEach(btn => {
+        btn.addEventListener('click', () => {
+            const action = btn.dataset.action;
+            if (action === 'open-task-manager') aegis.openTaskManager();
+            else if (action === 'open-settings-network') aegis.openSettings('network');
+            else if (action === 'open-settings-power') aegis.openSettings('power');
+        });
+    });
+
+    // Load persisted settings on startup
+    loadPersistedSettings();
+
+    // ═══════════════════════════════════════════
+    // DRAG & DROP PANEL REORDERING
+    // ═══════════════════════════════════════════
+    const overviewGrid = document.querySelector('.overview-grid');
+    let dragSrc = null;
+
+    function initDragAndDrop() {
+        const panels = overviewGrid.querySelectorAll('[data-panel-id]');
+        panels.forEach(panel => {
+            panel.setAttribute('draggable', 'true');
+
+            panel.addEventListener('dragstart', (e) => {
+                // Block drag if locked
+                if (overviewGrid.classList.contains('locked')) {
+                    e.preventDefault();
+                    return;
+                }
+                dragSrc = panel;
+                panel.classList.add('dragging');
+                e.dataTransfer.effectAllowed = 'move';
+                e.dataTransfer.setData('text/plain', panel.dataset.panelId);
+            });
+
+            panel.addEventListener('dragend', () => {
+                panel.classList.remove('dragging');
+                overviewGrid.querySelectorAll('.drag-over').forEach(el => el.classList.remove('drag-over'));
+                dragSrc = null;
+            });
+
+            panel.addEventListener('dragover', (e) => {
+                if (overviewGrid.classList.contains('locked')) return;
+                e.preventDefault();
+                e.dataTransfer.dropEffect = 'move';
+                if (panel !== dragSrc) {
+                    panel.classList.add('drag-over');
+                }
+            });
+
+            panel.addEventListener('dragleave', () => {
+                panel.classList.remove('drag-over');
+            });
+
+            panel.addEventListener('drop', (e) => {
+                e.preventDefault();
+                panel.classList.remove('drag-over');
+                if (dragSrc && dragSrc !== panel) {
+                    const allPanels = [...overviewGrid.querySelectorAll('[data-panel-id]')];
+                    const srcIdx = allPanels.indexOf(dragSrc);
+                    const tgtIdx = allPanels.indexOf(panel);
+
+                    if (srcIdx < tgtIdx) {
+                        panel.parentNode.insertBefore(dragSrc, panel.nextSibling);
+                    } else {
+                        panel.parentNode.insertBefore(dragSrc, panel);
+                    }
+
+                    saveLayout();
+                }
+            });
+        });
+    }
+
+    function saveLayout() {
+        const panels = overviewGrid.querySelectorAll('[data-panel-id]');
+        const order = [...panels].map(p => p.dataset.panelId);
+        localStorage.setItem('aegis-panel-order', JSON.stringify(order));
+    }
+
+    function loadLayout() {
+        const saved = localStorage.getItem('aegis-panel-order');
+        if (!saved) return;
+        try {
+            const order = JSON.parse(saved);
+            const fragment = document.createDocumentFragment();
+            order.forEach(id => {
+                const panel = overviewGrid.querySelector(`[data-panel-id="${id}"]`);
+                if (panel) fragment.appendChild(panel);
+            });
+            overviewGrid.querySelectorAll('[data-panel-id]').forEach(p => fragment.appendChild(p));
+            overviewGrid.appendChild(fragment);
+        } catch (e) { console.warn('Could not restore layout:', e); }
+    }
+
+    // Reset layout button
+    const resetLayoutBtn = document.getElementById('reset-layout-btn');
+    if (resetLayoutBtn) {
+        resetLayoutBtn.addEventListener('click', () => {
+            localStorage.removeItem('aegis-panel-order');
+            location.reload();
+        });
+    }
+
+    // --- Lock / Edit mode toggle ---
+    let layoutLocked = true;
+    overviewGrid.classList.add('locked');
+
+    const layoutModeBtn = document.getElementById('layout-mode-btn');
+    if (layoutModeBtn) {
+        layoutModeBtn.addEventListener('click', () => {
+            layoutLocked = !layoutLocked;
+            const layoutLockedCheck = document.getElementById('setting-layout-locked');
+            if (layoutLockedCheck) layoutLockedCheck.checked = layoutLocked;
+            if (layoutLocked) {
+                overviewGrid.classList.add('locked');
+                layoutModeBtn.textContent = '🔒 Locked';
+                layoutModeBtn.classList.remove('editing');
+            } else {
+                overviewGrid.classList.remove('locked');
+                layoutModeBtn.textContent = '✎ Edit Layout';
+                layoutModeBtn.classList.add('editing');
+            }
+            persistSettings();
+        });
+    }
+
+    // Initialize drag-and-drop and restore layout
+    loadLayout();
+    initDragAndDrop();
+});

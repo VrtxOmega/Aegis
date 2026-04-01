@@ -1,0 +1,33 @@
+const initProjectLauncher = (aegis) => {
+    const loadProjects = async () => {
+        const projectListDiv = document.getElementById('project-list');
+        projectListDiv.innerHTML = '<p>Loading projects...</p>';
+        const projects = await aegis.getProjectList();
+
+        if (projects.error) {
+            projectListDiv.innerHTML = `<p class="error-message">Error: ${projects.error}</p>`;
+            return;
+        }
+
+        if (projects.length === 0) {
+            projectListDiv.innerHTML = '<p>No projects found.</p>';
+            return;
+        }
+
+        projectListDiv.innerHTML = ''; // Clear loading message
+        projects.forEach(project => {
+            const projectLink = document.createElement('a');
+            projectLink.href = '#'; // Prevent default navigation
+            projectLink.textContent = project.name;
+            projectLink.title = project.path;
+            projectLink.addEventListener('click', (e) => {
+                e.preventDefault();
+                aegis.openProjectFolder(project.path);
+            });
+            projectListDiv.appendChild(projectLink);
+        });
+    };
+
+    loadProjects();
+    setInterval(loadProjects, 60000); // Refresh projects every minute
+};

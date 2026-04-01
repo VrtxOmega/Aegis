@@ -1,0 +1,320 @@
+/* VERITAS Gold and Black Theme */
+
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700&family=Roboto:wght@300;400;500&display=swap');
+
+:root {
+    --veritas-black-body: #0a0a0a;
+    --veritas-black-container: #111111;
+    --veritas-black-card: #1a1a1a;
+    --veritas-black-hover: #222222;
+    --veritas-border: #2a2a2a;
+    --veritas-gold-accent: #d4a843;
+    --veritas-gold-bright: #f0c040;
+    --veritas-gold-glow: rgba(212, 168, 67, 0.25);
+    --veritas-text-primary: #e0e0e0;
+    --veritas-text-secondary: #999999;
+    --veritas-red: #e06060;
+    --veritas-green: #60c060;
+    --font-primary: 'Inter', sans-serif;
+    --font-secondary: 'Roboto', sans-serif;
+}
+
+body {
+    font-family: var(--font-primary);
+    background-color: var(--veritas-black-body);
+    color: var(--veritas-text-primary);
+    margin: 0;
+    padding: 0;
+    overflow: hidden; /* Prevent scrollbars on main body */
+}
+
+.container {
+    display: flex;
+    flex-direction: column;
+    height: 100vh;
+    padding: 15px;
+    box-sizing: border-box;
+}
+
+.header {
+    background-color: var(--veritas-black-container);
+    padding: 15px 20px;
+    border-bottom: 1px solid var(--veritas-border);
+    margin-bottom: 15px;
+    border-radius: 8px;
+    box-shadow: 0 4px 8px var(--veritas-gold-glow);
+    text-align: center;
+}
+
+.header h1 {
+    margin: 0;
+    color: var(--veritas-gold-bright);
+    font-weight: 700;
+    letter-spacing: 1px;
+}
+
+.main-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    grid-template-rows: 1fr 1fr;
+    gap: 15px;
+    flex-grow: 1;
+}
+
+.panel {
+    background-color: var(--veritas-black-container);
+    border: 1px solid var(--veritas-border);
+    border-radius: 8px;
+    padding: 20px;
+    box-shadow: 0 2px 5px var(--veritas-gold-glow);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden; /* For scrollable content within panels */
+}
+
+.panel h2 {
+    color: var(--veritas-gold-accent);
+    margin-top: 0;
+    margin-bottom: 15px;
+    font-weight: 600;
+    border-bottom: 1px solid var(--veritas-border);
+    padding-bottom: 10px;
+}
+
+/* --- System Status Panel --- */
+.system-status-panel {
+    grid-column: 1 / 2;
+    grid-row: 1 / 2;
+}
+
+.metric-card {
+    background-color: var(--veritas-black-card);
+    padding: 10px 15px;
+    margin-bottom: 10px;
+    border-radius: 5px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-family: var(--font-secondary);
+    font-size: 0.95em;
+    border-left: 3px solid var(--veritas-gold-accent);
+}
+
+.metric-card .value {
+    font-weight: 700;
+    color: var(--veritas-gold-bright);
+}
+
+/* --- Project Launcher Panel --- */
+.project-launcher-panel {
+    grid-column: 2 / 3;
+    grid-row: 1 / 2;
+}
+
+.scroll-area {
+    flex-grow: 1;
+    overflow-y: auto;
+    padding-right: 5px; /* For scrollbar spacing */
+}
+
+.scroll-area::-webkit-scrollbar {
+    width: 8px;
+}
+
+.scroll-area::-webkit-scrollbar-track {
+    background: var(--veritas-black-card);
+    border-radius: 10px;
+}
+
+.scroll-area::-webkit-scrollbar-thumb {
+    background: var(--veritas-gold-accent);
+    border-radius: 10px;
+}
+
+.scroll-area::-webkit-scrollbar-thumb:hover {
+    background: var(--veritas-gold-bright);
+}
+
+.project-card {
+    background-color: var(--veritas-black-card);
+    padding: 10px 15px;
+    margin-bottom: 10px;
+    border-radius: 5px;
+    border: 1px solid var(--veritas-border);
+    transition: background-color 0.2s ease;
+}
+
+.project-card:hover {
+    background-color: var(--veritas-black-hover);
+}
+
+.project-card h3 {
+    margin: 0 0 5px 0;
+    color: var(--veritas-gold-bright);
+    font-size: 1.1em;
+}
+
+.project-card p {
+    margin: 0 0 10px 0;
+    color: var(--veritas-text-secondary);
+    font-size: 0.85em;
+    word-break: break-all;
+}
+
+.open-folder-btn {
+    background-color: var(--veritas-gold-accent);
+    color: var(--veritas-black-body);
+    border: none;
+    padding: 8px 12px;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 0.85em;
+    transition: background-color 0.2s ease, transform 0.1s ease;
+}
+
+.open-folder-btn:hover {
+    background-color: var(--veritas-gold-bright);
+    transform: translateY(-1px);
+}
+
+/* --- Family Task Board Panel --- */
+.task-board-panel {
+    grid-column: 1 / 2;
+    grid-row: 2 / 3;
+}
+
+.kanban-board {
+    display: flex;
+    gap: 10px;
+    flex-grow: 1;
+}
+
+.kanban-column {
+    flex: 1;
+    background-color: var(--veritas-black-card);
+    border-radius: 5px;
+    padding: 10px;
+    display: flex;
+    flex-direction: column;
+    border: 1px solid var(--veritas-border);
+}
+
+.kanban-column h3 {
+    color: var(--veritas-gold-bright);
+    margin-top: 0;
+    margin-bottom: 10px;
+    text-align: center;
+    border-bottom: 1px dashed var(--veritas-border);
+    padding-bottom: 5px;
+}
+
+.task-list {
+    flex-grow: 1;
+    min-height: 50px; /* Ensure drop target is visible */
+    padding-bottom: 10px;
+}
+
+.task-card {
+    background-color: var(--veritas-black-hover);
+    border: 1px solid var(--veritas-gold-accent);
+    padding: 10px;
+    margin-bottom: 8px;
+    border-radius: 5px;
+    cursor: grab;
+    transition: background-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.task-card:hover {
+    background-color: #333333;
+    box-shadow: 0 0 8px var(--veritas-gold-glow);
+}
+
+.task-card.dragging {
+    opacity: 0.5;
+    border: 2px dashed var(--veritas-gold-bright);
+}
+
+.task-card h4 {
+    margin: 0 0 5px 0;
+    color: var(--veritas-text-primary);
+    font-size: 1em;
+}
+
+.task-card p {
+    margin: 0;
+    color: var(--veritas-text-secondary);
+    font-size: 0.8em;
+}
+
+.task-actions {
+    margin-top: 10px;
+    text-align: right;
+}
+
+.delete-task-btn {
+    background-color: var(--veritas-red);
+    color: var(--veritas-text-primary);
+    border: none;
+    padding: 5px 8px;
+    border-radius: 3px;
+    cursor: pointer;
+    font-size: 0.75em;
+    transition: background-color 0.2s ease;
+}
+
+.delete-task-btn:hover {
+    background-color: #c04040;
+}
+
+.add-task-btn {
+    background-color: var(--veritas-green);
+    color: var(--veritas-black-body);
+    border: none;
+    padding: 8px 12px;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 0.9em;
+    margin-top: 10px;
+    width: 100%;
+    transition: background-color 0.2s ease;
+}
+
+.add-task-btn:hover {
+    background-color: #40c040;
+}
+
+/* --- Weather Widget Panel --- */
+.weather-widget-panel {
+    grid-column: 2 / 3;
+    grid-row: 2 / 3;
+}
+
+.weather-card {
+    flex-grow: 1;
+    background-color: var(--veritas-black-card);
+    border: 1px solid var(--veritas-border);
+    border-radius: 5px;
+    padding: 15px;
+    overflow: auto;
+    font-family: 'monospace', sans-serif; /* wttr.in output is ASCII art */
+    font-size: 0.85em;
+    line-height: 1.2;
+    white-space: pre-wrap; /* Preserve whitespace for ASCII art */
+}
+
+.weather-card pre {
+    margin: 0;
+    color: var(--veritas-text-primary);
+}
+
+/* General utility classes */
+.loading-text, .no-data-text, .error-text {
+    color: var(--veritas-text-secondary);
+    text-align: center;
+    margin-top: 20px;
+}
+
+.error-text {
+    color: var(--veritas-red);
+    font-weight: 600;
+}

@@ -1,0 +1,65 @@
+'const { ipcRenderer } = require("electron");
+
+// System Status Panel
+function updateSystemStatus() {
+  const os = require("os");
+  const systemStatusDiv = document.getElementById("system-status");
+  const cpuUsage = os.cpus().reduce((sum, cpu) => sum + cpu.times.user, 0);
+  const memoryUsage = (process.memoryUsage().heapUsed / 1024 / 1024).toFixed(2);
+  systemStatusDiv.innerHTML = `<p>CPU Usage: ${cpuUsage}%</p><p>Memory Usage: ${memoryUsage} MB</p>`;
+}
+setInterval(updateSystemStatus, 5000);
+
+// Project Launcher Panel
+function listProjects() {
+  const fs = require("fs");
+  const path = require("path");
+  const projectLauncherDiv = document.getElementById("project-launcher");
+  projectLauncherDiv.innerHTML = '';
+  const projects = fs.readdirSync(path.join(process.cwd(), "C:\Veritas_Lab\projects"));
+  projects.forEach(project => {
+    const button = document.createElement("button");
+    button.innerText = project;
+    button.onclick = () => ipcRenderer.send("open-project", path.join(process.cwd(), "C:\Veritas_Lab\projects", project));
+    projectLauncherDiv.appendChild(button);
+  });
+}
+listProjects();
+
+// Family Task Board Panel
+const sqlite3 = require("sqlite3").verbose();
+const db = new sqlite3.Database(":memory:", (err) => {
+  if (err) throw err;
+  console.log("Connected to the SQLite database");
+});
+db.serialize(() => {
+  db.run(`CREATE TABLE tasks (
+    id INTEGER PRIMARY KEY,
+    title TEXT NOT NULL,
+    column TEXT NOT NULL,
+    assigned_to TEXT
+  )`);
+  db.run(`INSERT INTO tasks (title, column) VALUES ('Task 1', 'To Do')`);
+  db.run(`INSERT INTO tasks (title, column) VALUES ('Task 2', 'In Progress')`);
+  db.run(`INSERT INTO tasks (title, column) VALUES ('Task 3', 'Done')`);
+});
+db.close((err) => {
+  if (err) throw err;
+  console.log("Close the database connection.
+");
+});
+
+// Weather Widget Panel
+function updateWeather() {
+  fetch("https://wttr.in/?format=j1")
+    .then(response => response.json())
+    .then(data => {
+      const weatherDiv = document.getElementById("weather-widget");
+      const currentConditions = data.current_condition[0];
+      weatherDiv.innerHTML = `<p>Temperature: ${currentConditionsFeelslikeC}°C</p><p>Weather: ${currentConditions.weatherDesc[0].value}</p>`;
+    });
+}
+setInterval(updateWeather, 3600000);
+
+// IPC Events for Project Launcher
+ipcRenderer.on("open-project

@@ -1,0 +1,125 @@
+// renderer_tasks.js
+document.addEventListener('DOMContentLoaded', () => {
+    const aegisAPI = window.aegisAPI;
+    let tasks = [];
+
+    function renderTasks() {
+        const todoList = document.getElementById('todo-tasks');
+        const inProgressList = document.getElementById('in-progress-tasks');
+        const doneList = document.getElementById('done-tasks');
+
+        todoList.innerHTML = '';
+        inProgressList.innerHTML = '';
+        doneList.innerHTML = '';
+
+        tasks.forEach(task => {
+            const taskItem = document.createElement('div');
+            taskItem.className = 'task-item';
+            taskItem.draggable = true;
+            taskItem.dataset.id = task.id;
+            taskItem.innerHTML = `
+                <span class="task-title">${task.title}</span>
+                <span class="task-assignee">Assigned to: ${task.assignee}</span>
+            `;
+
+            taskItem.addEventListener('dragstart', (e) => {
+                e.dataTransfer.setData('text/plain', task.id);
+                taskItem.classList.add('dragging');
+            });
+
+            taskItem.addEventListener('dragend', () => {
+                taskItem.classList.remove('dragging');
+            });
+
+            if (task.status === 'todo') {
+                todoList.appendChild(taskItem);
+            } else if (task.status === 'in-progress') {
+                inProgressList.appendChild(taskItem);
+            } else if (task.status === 'done') {
+                doneList.appendChild(taskItem);
+            }
+        });
+    }
+
+    async function fetchTasks() {
+        const response = await aegisAPI.getTasks();
+        if (response && !response.error) {
+            tasks = response.tasks;
+            renderTasks();
+        } else {
+            console.error('Failed to fetch tasks:', response.error);
+            document.getElementById('todo-tasks').innerHTML = `<div style="color: var(--red-critical);">Error loading tasks.</div>`;
+        }
+    }
+
+    const addTaskBtn = document.getElementById('add-task-btn');
+    addTaskBtn.addEventListener('click', async () => {
+        const newTaskInput = document.getElementById('new-task-input');
+        const assigneeSelect = document.getElementById('assignee-select');
+        const title = newTaskInput.value.trim();
+        const assignee = assigneeSelect.value;
+
+        if (title) {
+            const result = await aegisAPI.addTask({ title, assignee, status: 'todo' });
+            if (result && !result.error) {
+                newTaskInput.value = '';
+                await fetchTasks();
+            } else {
+                console.error('Failed to add task:', result.error);
+            }
+        }
+    });
+
+    function getDragAfterElement(container, y) {
+        const draggableElements = [...container.querySelectorAll('.task-item:not(.dragging)')];
+
+        return draggableElements.reduce((closest, child) => {
+            const box = child.getBoundingClientRect();
+            const offset = y - box.top - box.height / 2;
+            if (offset < 0 && offset > closest.offset) {
+                return { offset: offset, element: child };
+            } else {
+                return closest;
+            }
+        }, { offset: Number.NEGATIVE_INFINITY }).element;
+    }
+
+    function setupDragAndDrop() {
+        const columns = document.querySelectorAll('.kanban-column .task-list');
+        columns.forEach(column => {
+            column.addEventListener('dragover', (e) => {
+                e.preventDefault(); // Allow drop
+                const draggingItem = document.querySelector('.dragging');
+                if (draggingItem && !column.contains(draggingItem)) {
+                    const afterElement = getDragAfterElement(column, e.clientY);
+                    if (afterElement == null) {
+                        column.appendChild(draggingItem);
+                    } else {
+                        column.insertBefore(draggingItem, afterElement);
+                    }
+                }
+            });
+
+            column.addEventListener('drop', async (e) => {
+                e.preventDefault();
+                const taskId = e.dataTransfer.getData('text/plain');
+                const draggedElement = document.querySelector(`[data-id="${taskId}"]`);
+                if (!draggedElement) return;
+
+                const newStatus = e.currentTarget.parentElement.classList.contains('todo') ? 'todo' :
+                                  e.currentTarget.parentElement.classList.contains('in-progress') ? 'in-progress' :
+                                  'done';
+
+                const result = await aegisAPI.updateTaskStatus(parseInt(taskId), newStatus);
+                if (result && !result.error) {
+                    await fetchTasks(); // Re-fetch and re-render tasks to update state
+                } else {
+                    console.error('Failed to update task status:', result.error);
+                }
+            });
+        });
+    }
+
+    fetchTasks(); // Initial load for tasks
+    setupDragAndDrop();
+});

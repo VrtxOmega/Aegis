@@ -1,0 +1,43 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+*.egg
+dist/
+build/
+venv/
+.env
+
+# Node / Electron
+node_modules/
+package-lock.json
+
+# SQLite databases (contain local user data)
+*.db
+*.db-journal
+*.db-wal
+
+# OS
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Electron build output
+out/
+release/
+
+# Test artifacts
+*.log
+test_results/
+
+# Tuning receipts (local hardware state)
+backend/tuning_receipts/
+
+# Scan history exports
+backend/exports/

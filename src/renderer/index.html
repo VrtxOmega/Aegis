@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Aegis Home Base</title>
+    <link rel="stylesheet" href="styles.css">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700&family=Roboto:wght@300;400;500&display=swap" rel="stylesheet">
+</head>
+<body>
+    <div class="container">
+        <header class="header">
+            <h1>Aegis Home Base</h1>
+        </header>
+        <main class="main-grid">
+            <section class="panel" id="system-status-panel">
+                <h2>System Status</h2>
+                <div class="panel-content">
+                    <p>CPU: <span id="cpu-usage">Loading...</span></p>
+                    <p>RAM: <span id="ram-usage">Loading...</span></p>
+                    <p>Disk: <span id="disk-usage">Loading...</span></p>
+                </div>
+            </section>
+
+            <section class="panel" id="project-launcher-panel">
+                <h2>Project Launcher</h2>
+                <div class="panel-content" id="project-list">
+                    <p>Loading projects...</p>
+                </div>
+            </section>
+
+            <section class="panel" id="family-task-board-panel">
+                <h2>Family Task Board</h2>
+                <div class="panel-content task-board-grid">
+                    <div class="task-column">
+                        <h3>To Do</h3>
+                        <div id="todo-tasks" class="task-list"></div>
+                    </div>
+                    <div class="task-column">
+                        <h3>In Progress</h3>
+                        <div id="in-progress-tasks" class="task-list"></div>
+                    </div>
+                    <div class="task-column">
+                        <h3>Done</h3>
+                        <div id="done-tasks" class="task-list"></div>
+                    </div>
+                </div>
+                <button id="add-task-btn">Add New Task</button>
+            </section>
+
+            <section class="panel" id="weather-widget-panel">
+                <h2>Weather</h2>
+                <div class="panel-content">
+                    <p id="weather-condition">Loading...</p>
+                    <p id="weather-temp">Loading...</p>
+                </div>
+            </section>
+        </main>
+    </div>
+    <script src="renderer.js"></script>
+</body>
+</html>

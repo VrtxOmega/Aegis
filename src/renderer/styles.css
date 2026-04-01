@@ -1,0 +1,164 @@
+/* VERITAS Gold-and-Black Theme */
+
+:root {
+    --bg-true-black: #0a0a0a;
+    --bg-container: #111111;
+    --bg-card: #1a1a1a;
+    --bg-hover: #222222;
+    --border-color: #2a2a2a;
+    --gold-accent: #d4a843;
+    --gold-bright: #f0c040;
+    --gold-glow: rgba(212, 168, 67, 0.25);
+    --text-primary: #e0e0e0;
+    --text-secondary: #999999;
+    --red-critical: #e06060;
+    --green-success: #60c060;
+    --font-family: 'Inter', 'Roboto', sans-serif;
+}
+
+body {
+    font-family: var(--font-family);
+    background-color: var(--bg-true-black);
+    color: var(--text-primary);
+    margin: 0;
+    padding: 20px;
+    display: flex;
+    justify-content: center;
+    align-items: flex-start;
+    min-height: 100vh;
+}
+
+.container {
+    width: 100%;
+    max-width: 1400px;
+    background-color: var(--bg-container);
+    border-radius: 12px;
+    box-shadow: 0 8px 24px var(--gold-glow);
+    padding: 30px;
+    border: 1px solid var(--border-color);
+}
+
+.header {
+    text-align: center;
+    margin-bottom: 40px;
+    padding-bottom: 20px;
+    border-bottom: 1px solid var(--border-color);
+}
+
+.header h1 {
+    color: var(--gold-bright);
+    font-size: 2.8em;
+    font-weight: 700;
+    letter-spacing: 1px;
+    text-shadow: 0 0 10px var(--gold-glow);
+}
+
+.main-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+    gap: 25px;
+}
+
+.panel {
+    background-color: var(--bg-card);
+    border-radius: 10px;
+    padding: 25px;
+    border: 1px solid var(--border-color);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+    transition: transform 0.2s ease-in-out, box-shadow 0.2s ease-in-out;
+}
+
+.panel:hover {
+    transform: translateY(-5px);
+    box-shadow: 0 6px 16px var(--gold-glow);
+}
+
+.panel h2 {
+    color: var(--gold-accent);
+    font-size: 1.8em;
+    margin-top: 0;
+    margin-bottom: 20px;
+    border-bottom: 2px solid var(--gold-accent);
+    padding-bottom: 10px;
+}
+
+.panel-content {
+    font-size: 1.1em;
+    line-height: 1.6;
+    color: var(--text-secondary);
+}
+
+.panel-content p {
+    margin-bottom: 10px;
+}
+
+/* Task Board Specific Styles */
+.task-board-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 15px;
+    margin-top: 20px;
+}
+
+.task-column {
+    background-color: var(--bg-hover);
+    border-radius: 8px;
+    padding: 15px;
+    border: 1px solid var(--border-color);
+}
+
+.task-column h3 {
+    color: var(--gold-bright);
+    text-align: center;
+    margin-top: 0;
+    margin-bottom: 15px;
+    font-size: 1.4em;
+}
+
+.task-list {
+    min-height: 100px;
+    border: 1px dashed var(--border-color);
+    border-radius: 5px;
+    padding: 10px;
+}
+
+.task-item {
+    background-color: var(--bg-card);
+    border: 1px solid var(--gold-accent);
+    border-left: 5px solid var(--gold-bright);
+    padding: 10px;
+    margin-bottom: 8px;
+    border-radius: 5px;
+    font-size: 0.95em;
+    color: var(--text-primary);
+}
+
+#add-task-btn {
+    display: block;
+    width: 100%;
+    padding: 12px 20px;
+    margin-top: 20px;
+    background-color: var(--gold-accent);
+    color: var(--bg-true-black);
+    border: none;
+    border-radius: 8px;
+    font-size: 1.1em;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background-color 0.2s ease, transform 0.1s ease;
+}
+
+#add-task-btn:hover {
+    background-color: var(--gold-bright);
+    transform: translateY(-2px);
+}
+
+/* Responsive adjustments */
+@media (max-width: 768px) {
+    .main-grid {
+        grid-template-columns: 1fr;
+    }
+    .task-board-grid {
+        grid-template-columns: 1fr;
+    }
+}

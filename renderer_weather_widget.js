@@ -1,0 +1,24 @@
+const initWeatherWidget = (aegis) => {
+    const updateWeather = async () => {
+        const weatherDiv = document.getElementById('weather-widget-content');
+        weatherDiv.innerHTML = 'Loading weather...';
+        const weather = await aegis.getWeather();
+
+        if (weather.error) {
+            weatherDiv.innerHTML = `<p class="error-message">Error: ${weather.error}</p>`;
+            return;
+        }
+
+        weatherDiv.innerHTML = `
+            <h3>Current Conditions</h3>
+            <p><strong>Description:</strong> ${weather.weather_desc}</p>
+            <p><strong>Temperature:</strong> ${weather.temp_c}°C / ${weather.temp_f}°F</p>
+            <p><strong>Feels Like:</strong> ${weather.feels_like_c}°C</p>
+            <p><strong>Humidity:</strong> ${weather.humidity}%</p>
+            <p><strong>Wind Speed:</strong> ${weather.wind_speed_kmph} km/h</p>
+        `;
+    };
+
+    updateWeather();
+    setInterval(updateWeather, 300000); // Refresh weather every 5 minutes
+};

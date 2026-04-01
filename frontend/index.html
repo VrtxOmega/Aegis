@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Aegis Home Base</title>
+    <link rel="stylesheet" href="styles.css">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700&family=Roboto:wght@300;400;500&display=swap" rel="stylesheet">
+</head>
+<body>
+    <div class="container">
+        <header class="header">
+            <h1>Aegis Home Base</h1>
+        </header>
+
+        <main class="main-grid">
+            <section class="panel system-status-panel">
+                <h2>System Status</h2>
+                <div id="cpu-usage" class="metric-card">CPU: <span class="value">--%</span></div>
+                <div id="ram-usage" class="metric-card">RAM: <span class="value">-- GB / -- GB</span></div>
+                <div id="disk-usage" class="metric-card">Disk: <span class="value">-- GB / -- GB</span></div>
+            </section>
+
+            <section class="panel project-launcher-panel">
+                <h2>Project Launcher</h2>
+                <div id="project-list" class="scroll-area">
+                    <p class="loading-text">Loading projects...</p>
+                </div>
+            </section>
+
+            <section class="panel task-board-panel">
+                <h2>Family Task Board</h2>
+                <div class="kanban-board">
+                    <div class="kanban-column todo-column">
+                        <h3>To Do</h3>
+                        <div id="todo-tasks" class="task-list scroll-area"></div>
+                        <button class="add-task-btn" onclick="window.aegis.promptAddTask('To Do')">+ Add Task</button>
+                    </div>
+                    <div class="kanban-column in-progress-column">
+                        <h3>In Progress</h3>
+                        <div id="in-progress-tasks" class="task-list scroll-area"></div>
+                    </div>
+                    <div class="kanban-column done-column">
+                        <h3>Done</h3>
+                        <div id="done-tasks" class="task-list scroll-area"></div>
+                    </div>
+                </div>
+            </section>
+
+            <section class="panel weather-widget-panel">
+                <h2>Weather</h2>
+                <div id="weather-display" class="weather-card">
+                    <p class="loading-text">Loading weather...</p>
+                </div>
+            </section>
+        </main>
+    </div>
+
+    <script src="renderer.js"></script>
+</body>
+</html>
