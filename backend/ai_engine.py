@@ -21,7 +21,7 @@ ai_bp = Blueprint('ai', __name__)
 # ═══════════════════════════════════════════════════
 # POST-LLM OUTPUT SANITIZER
 # ═══════════════════════════════════════════════════
-# The LLM (qwen2.5:7b) was proven vulnerable to echoing
+# The LLM (qwen3:8b) was proven vulnerable to echoing
 # destructive OS commands when injected via finding fields.
 # This filter runs on ALL AI output before it reaches the UI.
 # Destruction Campaign W2 test: test_ai_injection_escalate
@@ -80,7 +80,7 @@ def _sanitize_ai_output(text):
 # OLLAMA CONFIG + SECURITY GUARDS
 # ═══════════════════════════════════════════════════
 OLLAMA_URL = "http://127.0.0.1:11434"
-MODEL = "qwen2.5:7b"
+MODEL = "qwen3:8b"
 TIMEOUT_SECONDS = 60
 MAX_RESPONSE_LEN = 8000  # Guard: cap response length
 KEEPALIVE_INTERVAL = 120  # seconds

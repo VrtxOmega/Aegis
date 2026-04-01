@@ -151,6 +151,75 @@ def _make_finding(rule_id, severity, category, title, detail, recommendation):
 _process_cache = []
 _cache_time = 0
 
+# ═══════════════════════════════════════════════════
+# FILE SCAN CACHE (MTIME BASED)
+# ═══════════════════════════════════════════════════
+import threading
+
+_file_scan_cache = {}
+_file_scan_lock = threading.Lock()
+
+_workspace_files_cache = []
+_workspace_files_time = 0
+_workspace_files_lock = threading.Lock()
+
+def _get_workspace_files():
+    """Scans Veritas_Lab and Desktop for package-lock.json, yarn.lock, and node_modules.*/package.json
+    Caches the file list for 5 seconds so parallel detectors don't hammer the disk."""
+    global _workspace_files_cache, _workspace_files_time
+    import time, os
+    
+    with _workspace_files_lock:
+        now = time.time()
+        if now - _workspace_files_time < 5:
+            return _workspace_files_cache
+        user_profile = os.environ.get('USERPROFILE', '')
+        base_dirs = [r'C:\Veritas_Lab']
+        if user_profile:
+            base_dirs.append(os.path.join(user_profile, 'OneDrive', 'Desktop', 'AI WorK'))
+            
+        skip_dirs = {'.git', 'venv', '.venv', 'AppData', 'Windows', 'Program Files', 'Program Files (x86)', 'build', 'dist', '.next', '.cache', '__pycache__'}
+        results = []
+        
+        def _walk(path):
+            try:
+                with os.scandir(path) as it:
+                    for entry in it:
+                        if entry.is_dir(follow_symlinks=False):
+                            if entry.name in skip_dirs or entry.name.startswith('.'):
+                                continue
+                            if entry.name == 'node_modules':
+                                try:
+                                    with os.scandir(entry.path) as pkg_it:
+                                        for pkg in pkg_it:
+                                            if pkg.is_dir(follow_symlinks=False):
+                                                pj = os.path.join(pkg.path, 'package.json')
+                                                try:
+                                                    if os.path.exists(pj):
+                                                        results.append({'path': pj, 'type': 'package.json', 'mtime': os.path.getmtime(pj)})
+                                                except OSError:
+                                                    pass
+                                except OSError:
+                                    pass
+                                continue
+                            _walk(entry.path)
+                        elif entry.is_file(follow_symlinks=False):
+                            if entry.name in ('package-lock.json', 'yarn.lock'):
+                                try:
+                                    results.append({'path': entry.path, 'type': entry.name, 'mtime': entry.stat().st_mtime})
+                                except OSError:
+                                    pass
+            except OSError:
+                pass
+                
+        for d in base_dirs:
+            if os.path.exists(d):
+                _walk(d)
+                
+        _workspace_files_cache = results
+        _workspace_files_time = now
+        return results
+
 # Build set of all process names we actually care about
 _INTERESTING_NAMES = set()
 for _r in LOLBIN_RULES:
@@ -619,8 +688,23 @@ def detect_network_threats():
             established = [c for c in conn_list if c.status == 'ESTABLISHED' and c.raddr]
 
             # NET-001: C2 port connections
+            import socket
             for c in established:
-                if c.raddr and c.raddr.port in C2_PORTS:
+                # Resolve sfrclak.com ad-hoc or match fixed IP 142.11.206.73
+                sfrclak_ip = None
+                try:
+                    sfrclak_ip = socket.gethostbyname('sfrclak.com')
+                except Exception:
+                    sfrclak_ip = '0.0.0.0' # fallback unused IP
+
+                if c.raddr and (c.raddr.ip == '142.11.206.73' or c.raddr.ip == sfrclak_ip):
+                    findings.append(_make_finding(
+                        'NET-005', 'critical', 'network',
+                        f"Active connection to known axios RAT C2 infrastructure!",
+                        f"{proc_name} (PID {pid}) → {c.raddr.ip}:{c.raddr.port}",
+                        'CRITICAL: Process is actively beaconing to blacklisted supply chain malware C2. Isolate machine immediately.'
+                    ))
+                elif c.raddr and c.raddr.port in C2_PORTS:
                     findings.append(_make_finding(
                         'NET-001', 'high', 'network',
                         f"Connection to known C2/attack port: {c.raddr.port}",
@@ -775,6 +859,142 @@ def detect_fileless():
     return findings
 
 
+def detect_supply_chain():
+    """Detect known malicious packages inside package-lock.json and yarn.lock."""
+    import re
+    findings = []
+    
+    files = _get_workspace_files()
+    lock_files = [f for f in files if f['type'] in ('package-lock.json', 'yarn.lock')]
+    
+    for f in lock_files:
+        path = f['path']
+        mtime = f['mtime']
+        
+        with _file_scan_lock:
+            cached = _file_scan_cache.get(path)
+            if cached and cached['mtime'] == mtime:
+                findings.extend(cached.get('supply_chain_findings', []))
+                continue
+        
+        # Cache miss, need to parse
+        file_findings = []
+        try:
+            with open(path, 'r', encoding='utf-8', errors='ignore') as fd:
+                content = fd.read()
+                
+            # Fast substring checks to skip slow regex engine explosion over large JSON files
+            has_plain = 'plain-crypto-js' in content
+            has_axios = 'axios' in content
+            
+            # IOC 1: sfrclak.com C2 domain
+            if 'sfrclak.com' in content:
+                file_findings.append(_make_finding(
+                    'SUP-001', 'critical', 'supply_chain',
+                    f"Malicious C2 domain 'sfrclak.com' found in {f['type']}",
+                    f"Path: {path}",
+                    'A dangerous software package was found on your computer. This package was part of a recent hack where attackers hid malware inside a popular tool that millions of developers use. This malware can give attackers full access to your computer. You need to remove it immediately.'
+                ))
+                
+            # IOC 2: plain-crypto-js versions 4.2.1+
+            if has_plain and re.search(r'"plain-crypto-js"\s*:\s*"(?:4\.2\.[1-9]|4\.[3-9]|[5-9]\.)', content):
+                file_findings.append(_make_finding(
+                    'SUP-002', 'critical', 'supply_chain',
+                    f"Malicious package 'plain-crypto-js' (v4.2.1+) found in {f['type']}",
+                    f"Path: {path}",
+                    'A dangerous software package was found on your computer. This package was part of a recent hack where attackers hid malware inside a popular tool that millions of developers use. This malware can give attackers full access to your computer. You need to remove it immediately.'
+                ))
+                
+            # IOC 3: axios versions 1.14.1 and 0.30.4
+            if has_axios and re.search(r'"axios"\s*:\s*"(?:1\.14\.1|0\.30\.4)"', content):
+                file_findings.append(_make_finding(
+                    'SUP-003', 'critical', 'supply_chain',
+                    f"Malicious compromised 'axios' version (1.14.1/0.30.4) found in {f['type']}",
+                    f"Path: {path}",
+                    'A dangerous software package was found on your computer. This package was part of a recent hack where attackers hid malware inside a popular tool that millions of developers use. This malware can give attackers full access to your computer. You need to remove it immediately.'
+                ))
+
+        except Exception:
+            pass
+            
+        # Update cache safely
+        with _file_scan_lock:
+            if path not in _file_scan_cache:
+                _file_scan_cache[path] = {'mtime': mtime}
+            else:
+                _file_scan_cache[path]['mtime'] = mtime
+            _file_scan_cache[path]['supply_chain_findings'] = file_findings
+            findings.extend(file_findings)
+
+    return findings
+
+
+def detect_postinstall_hooks():
+    """Detect suspicious postinstall scripts in node_modules packages."""
+    import json
+    findings = []
+    
+    files = _get_workspace_files()
+    pkg_files = [f for f in files if f['type'] == 'package.json']
+    
+    for f in pkg_files:
+        path = f['path']
+        mtime = f['mtime']
+        
+        with _file_scan_lock:
+            cached = _file_scan_cache.get(path)
+            if cached and cached['mtime'] == mtime:
+                findings.extend(cached.get('postinstall_findings', []))
+                continue
+            
+        file_findings = []
+        try:
+            # Fast string check before parsing JSON
+            with open(path, 'r', encoding='utf-8', errors='ignore') as fd:
+                content = fd.read()
+                
+            if '"postinstall"' in content or '"preinstall"' in content:
+                data = json.loads(content)
+                pkg_name = data.get('name', '').lower()
+                scripts = data.get('scripts', {})
+                for hook in ('preinstall', 'postinstall'):
+                    cmd = scripts.get(hook, '').lower()
+                    if not cmd:
+                        continue
+                        
+                    # Flag node execution of .js files in hooks (often abused)
+                    if 'node ' in cmd and '.js' in cmd:
+                        is_whitelisted_pkg = pkg_name in ('electron', 'node-pty', 'esbuild', 'core-js')
+                        if not is_whitelisted_pkg and not any(safe in cmd for safe in ['esbuild', 'opencollective', 'npm run']):
+                            file_findings.append(_make_finding(
+                                'PST-001', 'high', 'supply_chain',
+                                f"Suspicious {hook} hook executes direct JS",
+                                f"Path: {path}\nCmd: {cmd[:200]}",
+                                'Packages executing raw JS files during installation are highly suspicious. Verify this package.'
+                            ))
+                    
+                    # Flag obfuscation techniques (base64, hex, eval)
+                    if 'eval(' in cmd or 'buffer.from' in cmd or '\\x' in cmd or 'base64' in cmd:
+                        file_findings.append(_make_finding(
+                            'PST-002', 'critical', 'supply_chain',
+                            f"Obfuscated {hook} hook detected",
+                            f"Path: {path}\nCmd: {cmd[:200]}",
+                            'Obfuscated postinstall hooks are almost always malicious. Remove this package immediately.'
+                        ))
+        except Exception:
+            pass
+            
+        with _file_scan_lock:
+            if path not in _file_scan_cache:
+                _file_scan_cache[path] = {'mtime': mtime}
+            else:
+                _file_scan_cache[path]['mtime'] = mtime
+            _file_scan_cache[path]['postinstall_findings'] = file_findings
+            findings.extend(file_findings)
+            
+    return findings
+
+
 def compute_score(findings):
     """Compute 0-100 security posture score. 100 = clean."""
     if not findings:
@@ -828,9 +1048,11 @@ def _run_scan_worker():
         ('spyware', detect_spyware),
         ('priv_escalation', detect_priv_escalation),
         ('fileless', detect_fileless),
+        ('supply_chain', detect_supply_chain),
+        ('postinstall', detect_postinstall_hooks),
     ]
 
-    # Run ALL 11 detectors concurrently — safe here because this worker
+    # Run ALL 13 detectors concurrently — safe here because this worker
     # thread is OUTSIDE Waitress. Subprocess calls release the GIL,
     # giving true parallelism across the i9-13950HX's 24 cores.
     from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -844,7 +1066,7 @@ def _run_scan_worker():
         except Exception as e:
             return n, [], str(e), round((time.time() - dt0) * 1000)
 
-    with ThreadPoolExecutor(max_workers=11) as pool:
+    with ThreadPoolExecutor(max_workers=13) as pool:
         futures = {pool.submit(_run_one, d): d[0] for d in detectors}
         for future in as_completed(futures):
             name, results, error, elapsed_ms = future.result()

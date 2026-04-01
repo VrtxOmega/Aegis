@@ -194,7 +194,7 @@ def test_ai_engine():
         data = get("/api/ai/status")
         assert 'ollama' in data, "Missing 'ollama' key"
         assert 'model' in data, "Missing 'model' key"
-        assert data['model'] == 'qwen2.5:7b', f"Wrong model: {data['model']}"
+        assert data['model'] == 'qwen3:8b', f"Wrong model: {data['model']}"
         return f"Healthy={data['ollama'].get('healthy')}, Model={data['model']}"
 
     test("AI status endpoint", test_ai_status)
