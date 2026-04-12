@@ -68,6 +68,15 @@ def get_system_status():
         'cpu': f'{cpu_percent}%',
         'ram': f'{ram.used / (1024**3):.2f}GB / {ram.total / (1024**3):.2f}GB ({ram.percent:.1f}%)',
         'disk': disk_c_usage
+        # Calculate disk pressure level
+        disk_percent = disk.percent if hasattr(disk, 'percent') else 0
+        if disk_percent < 50:
+            disk_pressure = 'LOW'
+        elif disk_percent < 80:
+            disk_pressure = 'MED'
+        else:
+            disk_pressure = 'HIGH'
+        'disk_pressure': disk_pressure,
     })
 
 # --- Project Launcher ---
