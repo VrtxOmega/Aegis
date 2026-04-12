@@ -15,6 +15,7 @@ document.addEventListener('DOMContentLoaded', () => {
             systemStatusCpu.textContent = `${status.cpu.toFixed(1)}%`;
             systemStatusRam.textContent = `${status.memory.used.toFixed(1)} GB / ${status.memory.total.toFixed(1)} GB`;
             systemStatusDisk.textContent = `${status.disk.used.toFixed(1)} GB / ${status.disk.total.toFixed(1)} GB`;
+            systemStatusDiskPressure.textContent = status.disk_pressure || '--';
         } else {
             console.error('Failed to fetch system status:', status.error);
             systemStatusCpu.textContent = 'Error';
