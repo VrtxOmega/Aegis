@@ -19,6 +19,12 @@ Aegis Protect is the security and integrity layer of the VERITAS Omega sovereign
 
 **What it is**
 
+<div align="center">
+  <img src="assets/aegis_overview.png" width="800" alt="Aegis Protect Hardware Health & System Overview" />
+  <br />
+  <sub><i>Aegis Protect unified hardware health and system overview cockpit displaying real-time telemetry wrapped in the VERITAS gold-and-obsidian UI.</i></sub>
+</div>
+
 Aegis Protect is a self-contained Electron + Flask desktop application that provides:
 
 - Static code vulnerability scanning (regex and AST-based, offline)
@@ -40,6 +46,12 @@ Aegis is not an antivirus, not a network firewall, not a cloud SIEM, and not a m
 The following capabilities reflect what is implemented in the current codebase.
 
 ### Threat Hunting
+
+<div align="center">
+  <img src="assets/aegis_security.png" width="800" alt="Aegis Protect Security Threat Surface" />
+  <br />
+  <sub><i>Dynamic live threat hunting module identifying anomalous process structures and unusual network behavior payloads.</i></sub>
+</div>
 
 | Capability | Detail |
 |---|---|
