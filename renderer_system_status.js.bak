@@ -3,7 +3,7 @@ const initSystemStatus = (aegis) => {
         const status = await aegis.getSystemStatus();
         if (status.error) {
             console.error('System Status Error:', status.error);
-            document.getElementById('system-status-content').textContent = `<p class="error-message">Error: ${status.error}</p>`;
+            document.getElementById('system-status-content').innerHTML = `<p class="error-message">Error: ${status.error}</p>`;
             return;
         }
 

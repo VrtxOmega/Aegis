@@ -58,7 +58,7 @@ def parse_user_input(raw):
     return result
 
 def process_data(data_str):
-    return ast.literal_eval(data_str)
+    return eval(data_str)
 '''
 
 

@@ -404,7 +404,7 @@ document.addEventListener('DOMContentLoaded', () => {
             if (!list) return;
 
             const sorted = [...data.processes].sort((a, b) => b.cpu_percent - a.cpu_percent).slice(0, 5);
-            list.innerHTML = sorted.map((p, i) => {
+            list.textContent = sorted.map((p, i) => {
                 const trust = classifyProcess(p.name);
                 const trustIcon = trust === 'trusted' ? '✓' : trust === 'flagged' ? '⚠' : '?';
                 const trustClass = `trust-${trust}`;
@@ -522,11 +522,11 @@ document.addEventListener('DOMContentLoaded', () => {
 
             // Disk usage
             const diskContainer = document.getElementById('disk-usage-container');
-            diskContainer.innerHTML = '';
+            diskContainer.textContent = '';
             (data.disk_usage || []).forEach(disk => {
                 const item = document.createElement('div');
                 item.className = 'disk-item';
-                item.innerHTML = `
+                item.textContent = `
                     <div class="stat-row clickable" data-action="open-settings-storage" title="Open Storage Settings">
                         <span class="stat-label">${disk.device}</span>
                         <div class="progress-bar-bg"><div class="progress-bar-fill${disk.percent >= 85 ? ' bar-critical' : disk.percent >= 60 ? ' bar-warning' : ''}" style="width:${disk.percent}%"></div></div>
@@ -571,10 +571,10 @@ document.addEventListener('DOMContentLoaded', () => {
             const data = await aegis.get('/api/weather/');
             const el = document.getElementById('weather-data');
             if (data.error) {
-                el.innerHTML = `<p class="error">Error: ${data.error}</p>`;
+                el.textContent = `<p class="error">Error: ${data.error}</p>`;
                 return;
             }
-            el.innerHTML = `
+            el.textContent = `
                 <p class="temp">${data.temperature_f}°F</p>
                 <p class="description">${data.description}</p>
                 <div class="details">
@@ -744,7 +744,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 const row = document.createElement('tr');
                 row.className = 'proc-row-clickable';
                 row.title = risk !== 'normal' ? reasons.join(', ') : '';
-                row.innerHTML = `
+                row.textContent = `
                     <td class="td-risk"><span class="sec-trust-dot ${dotClass}" title="${risk}: ${reasons.join(', ')}"></span></td>
                     <td>${p.pid}</td>
                     <td>${p.name}</td>
@@ -764,7 +764,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 const reasonHtml = risk !== 'normal'
                     ? `<span class="sec-explain-label">Why ${risk}</span><span class="sec-explain-value">${reasons.join(' · ')}</span>`
                     : '';
-                explainRow.innerHTML = `
+                explainRow.textContent = `
                     <td colspan="7" class="sec-explain-cell">
                         <div class="sec-explain-grid">
                             ${reasonHtml}
@@ -923,7 +923,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     }
                 }
 
-                row.innerHTML = `
+                row.textContent = `
                     <td>${p.port}</td>
                     <td>${p.process}</td>
                     <td class="mono">${p.address}</td>
@@ -963,7 +963,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 const group = document.createElement('div');
                 group.className = 'sec-conn-group';
 
-                group.innerHTML = `
+                group.textContent = `
                     <div class="sec-conn-group-header">
                         <span class="sec-conn-group-name">${proc}</span>
                         <span class="sec-conn-group-count">${conns.length} conn${conns.length !== 1 ? 's' : ''}</span>
@@ -1016,7 +1016,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 const risk = item.location_risk || 'user';
                 const riskLabel = risk.toUpperCase();
                 const shortCmd = item.command.length > 80 ? item.command.substring(0, 77) + '...' : item.command;
-                row.innerHTML = `
+                row.textContent = `
                     <td><span class="sec-startup-risk risk-${risk}">${riskLabel}</span></td>
                     <td>${item.name}</td>
                     <td><span class="source-badge source-${item.type}">${item.source}</span></td>
@@ -1774,7 +1774,7 @@ document.addEventListener('DOMContentLoaded', () => {
             return html;
         }
 
-        panel.innerHTML = `
+        panel.textContent = `
             <div class="inline-editor-header">
                 <span class="editor-filename">${fileData.file}</span>
                 <div style="display:flex;align-items:center;gap:10px">
@@ -1898,7 +1898,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 });
 
                 if (!result.diff || result.diff.length === 0) {
-                    diffPreview.innerHTML = '<div class="diff-empty">No changes detected.</div>';
+                    diffPreview.textContent = '<div class="diff-empty">No changes detected.</div>';
                 } else {
                     let diffHtml = `<div class="diff-header">${result.total_changes} line${result.total_changes > 1 ? 's' : ''} changed</div>`;
                     result.diff.forEach(d => {
@@ -1908,11 +1908,11 @@ document.addEventListener('DOMContentLoaded', () => {
                             `<div class="diff-new">\u002B ${escapeHtml(d.new)}</div>` +
                             `</div>`;
                     });
-                    diffPreview.innerHTML = diffHtml;
+                    diffPreview.textContent = diffHtml;
                 }
                 diffPreview.style.display = 'block';
             } catch (err) {
-                diffPreview.innerHTML = '<div style="color:#e74c3c">Failed to compute diff.</div>';
+                diffPreview.textContent = '<div style="color:#e74c3c">Failed to compute diff.</div>';
                 diffPreview.style.display = 'block';
             }
         });
@@ -1958,7 +1958,7 @@ document.addEventListener('DOMContentLoaded', () => {
                         is_target: (fileData.start_line + idx) === finding.line,
                     }));
                     originalText = editedTextLines.join('\n');
-                    codeView.innerHTML = buildCodeView();
+                    codeView.textContent = buildCodeView();
 
                     // Show diff in preview if changes were made
                     if (result.diff && result.diff.length > 0) {
@@ -1970,7 +1970,7 @@ document.addEventListener('DOMContentLoaded', () => {
                                 `<div class="diff-new">\u002B ${escapeHtml(d.new)}</div>` +
                                 `</div>`;
                         });
-                        diffPreview.innerHTML = diffHtml;
+                        diffPreview.textContent = diffHtml;
                         diffPreview.style.display = 'block';
                     }
 
@@ -2098,7 +2098,7 @@ document.addEventListener('DOMContentLoaded', () => {
             actionsHtml += `<button class="finding-action-btn btn-whitelist" data-id="${f.id}" data-name="${f.title}">✓ Whitelist</button>`;
             actionsHtml += '</div>';
 
-            card.innerHTML = `
+            card.textContent = `
                 <div class="finding-header">
                     <span class="sev-badge ${f.severity}">${f.severity}</span>
                     <span class="finding-id">${f.id}</span>
@@ -2321,7 +2321,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
             // Summary stats
             const s = result.summary || {};
-            summaryEl.innerHTML = `
+            summaryEl.textContent = `
                 ${s.process_links ? `<span class="correlation-stat">🔄 ${s.process_links} Process</span>` : ''}
                 ${s.network_links ? `<span class="correlation-stat">🌐 ${s.network_links} Network</span>` : ''}
                 ${s.code_links ? `<span class="correlation-stat">📂 ${s.code_links} Code</span>` : ''}
@@ -2349,7 +2349,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 </div>`;
             }
 
-            listEl.innerHTML = html;
+            listEl.textContent = html;
         } catch (e) {
             console.warn('Correlation error:', e);
             panel.style.display = 'none';
@@ -2415,10 +2415,10 @@ document.addEventListener('DOMContentLoaded', () => {
             const el = document.getElementById('scan-history-list');
             if (!el) return;
             if (!data.history || data.history.length === 0) {
-                el.innerHTML = '<p class="findings-placeholder">No scan history yet.</p>';
+                el.textContent = '<p class="findings-placeholder">No scan history yet.</p>';
                 return;
             }
-            el.innerHTML = data.history.map(s => {
+            el.textContent = data.history.map(s => {
                 const scoreClass = s.score >= 90 ? 'clean' : s.score >= 70 ? 'guarded' : s.score >= 50 ? 'elevated' : 'critical';
                 const ts = s.timestamp ? new Date(s.timestamp).toLocaleString() : '—';
                 const counts = [];
@@ -2683,7 +2683,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
             html += '</div>';
         }
-        grid.innerHTML = html;
+        grid.textContent = html;
 
         // Bind click handlers
         grid.querySelectorAll('.tuning-profile-card:not(.disabled)').forEach(card => {
@@ -2748,7 +2748,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
             html += '</div>';
         }
-        container.innerHTML = html;
+        container.textContent = html;
     }
 
     function renderTuningReceipts(receipts) {
@@ -2756,7 +2756,7 @@ document.addEventListener('DOMContentLoaded', () => {
         if (!container) return;
 
         if (!receipts.length) {
-            container.innerHTML = '<div style="color:var(--text-muted);font-size:0.85em;">No actions recorded</div>';
+            container.textContent = '<div style="color:var(--text-muted);font-size:0.85em;">No actions recorded</div>';
             return;
         }
 
@@ -2784,7 +2784,7 @@ document.addEventListener('DOMContentLoaded', () => {
             }
             html += '</div>';
         }
-        container.innerHTML = html;
+        container.textContent = html;
     }
 
     async function applyTuningProfile(profileName) {
@@ -2812,7 +2812,7 @@ document.addEventListener('DOMContentLoaded', () => {
             const overlay = document.createElement('div');
             overlay.className = 'aegis-confirm-overlay open';
             overlay.style.zIndex = '9999';
-            overlay.innerHTML = `
+            overlay.textContent = `
                 <div class="aegis-confirm-box" style="text-align:center; min-height: 180px; display:flex; flex-direction:column; justify-content:center;">
                     <h3 style="color:var(--gold); margin:0 0 15px 0; font-size:1.3em; letter-spacing:2px;" id="tuning-phase-text">[PHASE 1: PRE-FLIGHT]</h3>
                     <div style="color:var(--text-muted); font-family:'JetBrains Mono',monospace; font-size:0.9em;" id="tuning-phase-sub">Validating EC & Thermal Bounds...</div>
@@ -3192,7 +3192,7 @@ document.addEventListener('DOMContentLoaded', () => {
             data = await aegis.get('/api/lifecycle/status');
             if (!data || data.error) throw new Error(data?.error || 'no data');
         } catch (e) {
-            grid.innerHTML = '<div class="dep-loading">Could not reach lifecycle manager</div>';
+            grid.textContent = '<div class="dep-loading">Could not reach lifecycle manager</div>';
             return;
         }
 

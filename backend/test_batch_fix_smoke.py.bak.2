@@ -54,11 +54,11 @@ import json
 
 def parse_user_input(raw):
     """Parse user config from string."""
-    result = ast.literal_eval(raw)  # DANGEROUS: code injection
+    result = eval(raw)  # DANGEROUS: code injection
     return result
 
 def process_data(data_str):
-    return ast.literal_eval(data_str)
+    return eval(data_str)
 '''
 
 

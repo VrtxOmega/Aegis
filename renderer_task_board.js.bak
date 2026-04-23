@@ -12,7 +12,7 @@ const initTaskBoard = (aegis) => {
         card.setAttribute('draggable', 'true');
         card.dataset.taskId = task.id;
         card.dataset.status = task.status;
-        card.textContent = `
+        card.innerHTML = `
             <strong>${task.title}</strong><br>
             <small>Assigned to: ${task.assigned_to || 'Unassigned'}</small>
         `;

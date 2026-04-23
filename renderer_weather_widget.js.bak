@@ -9,7 +9,7 @@ const initWeatherWidget = (aegis) => {
             return;
         }
 
-        weatherDiv.textContent = `
+        weatherDiv.innerHTML = `
             <h3>Current Conditions</h3>
             <p><strong>Description:</strong> ${weather.weather_desc}</p>
             <p><strong>Temperature:</strong> ${weather.temp_c}°C / ${weather.temp_f}°F</p>

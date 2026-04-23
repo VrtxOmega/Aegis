@@ -48,7 +48,7 @@ document.addEventListener('DOMContentLoaded', () => {
             renderTasks();
         } else {
             console.error('Failed to fetch tasks:', response.error);
-            document.getElementById('todo-tasks').textContent = `<div style="color: var(--red-critical);">Error loading tasks.</div>`;
+            document.getElementById('todo-tasks').innerHTML = `<div style="color: var(--red-critical);">Error loading tasks.</div>`;
         }
     }
 

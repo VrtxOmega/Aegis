@@ -17,7 +17,7 @@ document.addEventListener('DOMContentLoaded', () => {
             taskItem.className = 'task-item';
             taskItem.draggable = true;
             taskItem.dataset.id = task.id;
-            taskItem.textContent = `
+            taskItem.innerHTML = `
                 <span class="task-title">${task.title}</span>
                 <span class="task-assignee">Assigned to: ${task.assignee}</span>
             `;
@@ -48,7 +48,7 @@ document.addEventListener('DOMContentLoaded', () => {
             renderTasks();
         } else {
             console.error('Failed to fetch tasks:', response.error);
-            document.getElementById('todo-tasks').textContent = `<div style="color: var(--red-critical);">Error loading tasks.</div>`;
+            document.getElementById('todo-tasks').innerHTML = `<div style="color: var(--red-critical);">Error loading tasks.</div>`;
         }
     }
 

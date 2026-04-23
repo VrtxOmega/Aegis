@@ -36,7 +36,7 @@ def index():
     return "Hello World"
 
 if __name__ == '__main__':
-    app.run(debug=False, host='127.0.0.1', port=8080)
+    app.run(debug=False, host='0.0.0.0', port=8080)
 '''
 
 VULN_SECRET = '''"""Config with hardcoded secrets."""
@@ -54,11 +54,11 @@ import json
 
 def parse_user_input(raw):
     """Parse user config from string."""
-    result = ast.literal_eval(raw)  # DANGEROUS: code injection
+    result = eval(raw)  # DANGEROUS: code injection
     return result
 
 def process_data(data_str):
-    return ast.literal_eval(data_str)
+    return eval(data_str)
 '''
 
 

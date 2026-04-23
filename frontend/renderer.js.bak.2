@@ -176,10 +176,10 @@ document.addEventListener('DOMContentLoaded', () => {
     async function updateWeather() {
         const weather = await window.aegis.getWeather();
         if (weather && !weather.error) {
-            weatherDisplayDiv.textContent = `<pre>${weather.content}</pre>`;
+            weatherDisplayDiv.innerHTML = `<pre>${weather.content}</pre>`;
         } else {
             console.error('Failed to fetch weather:', weather.error);
-            weatherDisplayDiv.textContent = '<p class="error-text">Failed to load weather.</p>';
+            weatherDisplayDiv.innerHTML = '<p class="error-text">Failed to load weather.</p>';
         }
     }
     setInterval(updateWeather, 3600000); // Refresh every hour

@@ -157,12 +157,13 @@ body > .container::before {
 }
 
 .header h1 {
-    color: var(--gold-bright);
+    color: #c9a84c;
+    font-family: 'Georgia', serif;
     font-weight: 700;
-    font-size: 1.4em;
+    font-size: 1.6em;
     letter-spacing: 3px;
     text-transform: uppercase;
-    text-shadow: 0 0 24px var(--gold-glow-strong), 0 0 48px rgba(255, 200, 50, 0.1);
+    text-shadow: 0 2px 8px rgba(201, 168, 76, 0.3), 0 0 2px rgba(201, 168, 76, 0.5);
     margin-bottom: 2px;
 }
 

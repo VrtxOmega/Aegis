@@ -76,7 +76,7 @@ document.addEventListener('DOMContentLoaded', async () => {
             taskItem.draggable = true; // Make tasks draggable
             taskItem.dataset.taskId = task.id;
             taskItem.dataset.taskStatus = task.status;
-            taskItem.textContent = `
+            taskItem.innerHTML = `
                 <h4>${task.title}</h4>
                 <p>Assigned to: ${task.assignedTo}</p>
                 <p>Due: ${task.dueDate}</p>

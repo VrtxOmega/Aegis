@@ -68,7 +68,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 taskCard.setAttribute('draggable', 'true');
                 taskCard.dataset.taskId = task.id;
                 taskCard.dataset.taskStatus = task.status;
-                taskCard.textContent = `
+                taskCard.innerHTML = `
                     <h4>${task.description}</h4>
                     <p>Assigned to: ${task.assignee}</p>
                     <div class="task-actions">
@@ -176,10 +176,10 @@ document.addEventListener('DOMContentLoaded', () => {
     async function updateWeather() {
         const weather = await window.aegis.getWeather();
         if (weather && !weather.error) {
-            weatherDisplayDiv.textContent = `<pre>${weather.content}</pre>`;
+            weatherDisplayDiv.innerHTML = `<pre>${weather.content}</pre>`;
         } else {
             console.error('Failed to fetch weather:', weather.error);
-            weatherDisplayDiv.textContent = '<p class="error-text">Failed to load weather.</p>';
+            weatherDisplayDiv.innerHTML = '<p class="error-text">Failed to load weather.</p>';
         }
     }
     setInterval(updateWeather, 3600000); // Refresh every hour

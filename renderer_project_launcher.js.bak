@@ -14,7 +14,7 @@ const initProjectLauncher = (aegis) => {
             return;
         }
 
-        projectListDiv.textContent = ''; // Clear loading message
+        projectListDiv.innerHTML = ''; // Clear loading message
         projects.forEach(project => {
             const projectLink = document.createElement('a');
             projectLink.href = '#'; // Prevent default navigation

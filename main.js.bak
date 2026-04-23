@@ -56,7 +56,7 @@ function updateWeather() {
     .then(data => {
       const weatherDiv = document.getElementById("weather-widget");
       const currentConditions = data.current_condition[0];
-      weatherDiv.textContent = `<p>Temperature: ${currentConditionsFeelslikeC}°C</p><p>Weather: ${currentConditions.weatherDesc[0].value}</p>`;
+      weatherDiv.innerHTML = `<p>Temperature: ${currentConditionsFeelslikeC}°C</p><p>Weather: ${currentConditions.weatherDesc[0].value}</p>`;
     });
 }
 setInterval(updateWeather, 3600000);

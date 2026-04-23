@@ -1,15 +1,15 @@
 const initWeatherWidget = (aegis) => {
     const updateWeather = async () => {
         const weatherDiv = document.getElementById('weather-widget-content');
-        weatherDiv.textContent = 'Loading weather...';
+        weatherDiv.innerHTML = 'Loading weather...';
         const weather = await aegis.getWeather();
 
         if (weather.error) {
-            weatherDiv.textContent = `<p class="error-message">Error: ${weather.error}</p>`;
+            weatherDiv.innerHTML = `<p class="error-message">Error: ${weather.error}</p>`;
             return;
         }
 
-        weatherDiv.textContent = `
+        weatherDiv.innerHTML = `
             <h3>Current Conditions</h3>
             <p><strong>Description:</strong> ${weather.weather_desc}</p>
             <p><strong>Temperature:</strong> ${weather.temp_c}°C / ${weather.temp_f}°F</p>

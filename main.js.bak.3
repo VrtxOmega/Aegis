@@ -6,7 +6,7 @@ function updateSystemStatus() {
   const systemStatusDiv = document.getElementById("system-status");
   const cpuUsage = os.cpus().reduce((sum, cpu) => sum + cpu.times.user, 0);
   const memoryUsage = (process.memoryUsage().heapUsed / 1024 / 1024).toFixed(2);
-  systemStatusDiv.textContent = `<p>CPU Usage: ${cpuUsage}%</p><p>Memory Usage: ${memoryUsage} MB</p>`;
+  systemStatusDiv.innerHTML = `<p>CPU Usage: ${cpuUsage}%</p><p>Memory Usage: ${memoryUsage} MB</p>`;
 }
 setInterval(updateSystemStatus, 5000);
 
@@ -15,7 +15,7 @@ function listProjects() {
   const fs = require("fs");
   const path = require("path");
   const projectLauncherDiv = document.getElementById("project-launcher");
-  projectLauncherDiv.textContent = '';
+  projectLauncherDiv.innerHTML = '';
   const projects = fs.readdirSync(path.join(process.cwd(), "C:\Veritas_Lab\projects"));
   projects.forEach(project => {
     const button = document.createElement("button");
@@ -56,7 +56,7 @@ function updateWeather() {
     .then(data => {
       const weatherDiv = document.getElementById("weather-widget");
       const currentConditions = data.current_condition[0];
-      weatherDiv.textContent = `<p>Temperature: ${currentConditionsFeelslikeC}°C</p><p>Weather: ${currentConditions.weatherDesc[0].value}</p>`;
+      weatherDiv.innerHTML = `<p>Temperature: ${currentConditionsFeelslikeC}°C</p><p>Weather: ${currentConditions.weatherDesc[0].value}</p>`;
     });
 }
 setInterval(updateWeather, 3600000);

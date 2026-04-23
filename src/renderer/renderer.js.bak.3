@@ -39,7 +39,7 @@ document.addEventListener('DOMContentLoaded', async () => {
             projects.forEach(project => {
                 const projectDiv = document.createElement('div');
                 projectDiv.className = 'project-item'; // Add a class for styling
-                projectDiv.textContent = `
+                projectDiv.innerHTML = `
                     <h3>${project.name}</h3>
                     <p>${project.path}</p>
                     <button data-path="${project.path}">Open Folder</button>
@@ -59,7 +59,7 @@ document.addEventListener('DOMContentLoaded', async () => {
             });
         } catch (error) {
             console.error('Failed to fetch projects:', error);
-            projectListElem.textContent = '<p>Error loading projects.</p>';
+            projectListElem.innerHTML = '<p>Error loading projects.</p>';
         }
     };
     updateProjectList(); // Initial fetch
@@ -76,7 +76,7 @@ document.addEventListener('DOMContentLoaded', async () => {
             taskItem.draggable = true; // Make tasks draggable
             taskItem.dataset.taskId = task.id;
             taskItem.dataset.taskStatus = task.status;
-            taskItem.textContent = `
+            taskItem.innerHTML = `
                 <h4>${task.title}</h4>
                 <p>Assigned to: ${task.assignedTo}</p>
                 <p>Due: ${task.dueDate}</p>

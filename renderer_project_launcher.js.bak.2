@@ -10,11 +10,11 @@ const initProjectLauncher = (aegis) => {
         }
 
         if (projects.length === 0) {
-            projectListDiv.textContent = '<p>No projects found.</p>';
+            projectListDiv.innerHTML = '<p>No projects found.</p>';
             return;
         }
 
-        projectListDiv.textContent = ''; // Clear loading message
+        projectListDiv.innerHTML = ''; // Clear loading message
         projects.forEach(project => {
             const projectLink = document.createElement('a');
             projectLink.href = '#'; // Prevent default navigation

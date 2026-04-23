@@ -1,4 +1,5 @@
 const { app, BrowserWindow, ipcMain, shell, Menu, screen, Tray, nativeImage, Notification, dialog } = require('electron');
+app.commandLine.appendSwitch('remote-debugging-port', '9222');
 const path = require('path');
 const fs = require('fs');
 const { spawn } = require('child_process');
@@ -157,17 +158,47 @@ function createWindow() {
     // mainWindow.webContents.openDevTools();
 }
 
+function killPortOwnerSync(port) {
+    try {
+        const { execSync } = require('child_process');
+        const output = execSync(`netstat -ano | findstr :${port}`, { encoding: 'utf8' }).trim().split('\n');
+        const pids = new Set();
+        for (const line of output) {
+            if (line.includes('LISTENING')) {
+                const parts = line.trim().split(/\s+/);
+                const pid = parts[parts.length - 1];
+                if (/^\d+$/.test(pid)) pids.add(pid);
+            }
+        }
+        for (const pid of pids) {
+            console.log(`Killing old process ${pid} on port ${port}...`);
+            execSync(`taskkill /F /PID ${pid}`);
+        }
+    } catch (e) {
+        // Findstr returns 1 if nothing found, which throws. Ignore.
+    }
+}
+
 function startFlaskBackend() {
+    killPortOwnerSync(5000); // Prevent polling race condition by clearing port before spawn
+
     // Resolve backend path for both dev and packaged modes
-    const backendPath = app.isPackaged
-        ? path.join(process.resourcesPath, 'backend')
-        : path.join(__dirname, '..', 'backend');
+    const resourcesBackend = path.join(process.resourcesPath, 'backend');
+    const localBackend = path.join(__dirname, '..', 'backend');
     
-    // Use venv Python if available, fall back to system python
+    // The "ghost launcher" tricks app.isPackaged to true, but lacks the resources directory.
+    // We check existence to safely fall back to the local source tree.
+    const backendPath = fs.existsSync(resourcesBackend) ? resourcesBackend : localBackend;
+    
+    // Use venv Python if available, fall back to system python (which may fail spawn if unaliased Windows Store version)
     const venvPython = path.join(backendPath, 'venv', 'Scripts', 'python.exe');
     const pythonExe = fs.existsSync(venvPython) ? venvPython : 'python';
     
-    flaskProcess = spawn(pythonExe, ['app.py'], { cwd: backendPath, stdio: ['ignore', 'pipe', 'pipe'] });
+    flaskProcess = spawn(pythonExe, ['app.py'], { 
+        cwd: backendPath, 
+        stdio: ['ignore', 'pipe', 'pipe'],
+        shell: pythonExe === 'python' // Required to spawn Windows aliases without ENOENT
+    });
 
     flaskProcess.stdout.on('data', (data) => {
         console.log(`Flask stdout: ${data}`);

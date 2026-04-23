@@ -23,7 +23,7 @@ from lifecycle_api import lifecycle_bp
 from bsod_watchdog import start_watchdog as start_bsod_watchdog, get_watchdog_status
 
 app = Flask(__name__)
-CORS(app, origins=["http://127.0.0.1"])
+CORS(app)
 
 # Initialize database
 init_app(app)

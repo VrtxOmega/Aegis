@@ -262,7 +262,7 @@ DANGEROUS_FUNCTIONS = [
     (re.compile(r'\b__import__\s*\('), 'importlib.import_module()', '.py'),
     (re.compile(r'\bsubprocess\.call\s*\(.*shell\s*=\s*True'), 'subprocess shell=True', '.py'),
     (re.compile(r'\bos\.system\s*\('), 'subprocess.run()', '.py'),
-    (re.compile(r'\beval\s*\('), 'ast.literal_eval()', '.js'),
+    (re.compile(r'\beval\s*\('), 'eval()', '.js'),
     (re.compile(r'\bnew\s+Function\s*\('), 'new Function()', '.js'),
     (re.compile(r'innerHTML\s*='), 'innerHTML assignment', '.js'),
     (re.compile(r'document\.write\s*\('), 'document.write()', '.js'),
@@ -894,7 +894,7 @@ def _apply_pattern_fix(line, category, title):
 
     # ── eval() → ast.literal_eval() ──
     if title_lower.startswith('eval'):
-        line = line.replace('ast.literal_eval(', 'ast.literal_eval(')
+        line = line.replace('eval(', 'ast.literal_eval(')
         return line
 
     # ── os.system() → subprocess.run() ──

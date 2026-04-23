@@ -894,7 +894,7 @@ def _apply_pattern_fix(line, category, title):
 
     # ── eval() → ast.literal_eval() ──
     if title_lower.startswith('eval'):
-        line = line.replace('ast.literal_eval(', 'ast.literal_eval(')
+        line = line.replace('eval(', 'ast.literal_eval(')
         return line
 
     # ── os.system() → subprocess.run() ──

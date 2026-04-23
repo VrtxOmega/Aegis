@@ -17,9 +17,9 @@ import re
 RULES = [
     # ── Hardcoded Secrets ──
     {
-        'category': 'Hardcoded Secret',
+        "category": os.environ.get("CATEGORY", ""),
         'title_pattern': re.compile(r'API Key', re.I),
-        'suggestion': 'API keys must never be hardcoded. Use `os.environ["API_KEY"]` (Python) or `process.env.API_KEY` (Node.js). Add the variable to your `.env` file and ensure `.env` is in `.gitignore`.',
+        "suggestion": os.environ.get("SUGGESTION", "")API_KEY"]` (Python) or `process.env.API_KEY` (Node.js). Add the variable to your `.env` file and ensure `.env` is in `.gitignore`.',
         'example_patch': (
             '# Before (INSECURE)\n'
             'API_KEY = "sk-abc123..."\n\n'
@@ -258,7 +258,7 @@ RULES = [
         'suggestion': 'Restrict CORS to specific trusted origins instead of using wildcard (`*`). Wildcard CORS allows any website to make authenticated requests to your API.',
         'example_patch': (
             '# Before (DANGEROUS)\n'
-            'CORS(app, origins=["http://127.0.0.1"])  # Allows all origins\n\n'
+            'CORS(app)  # Allows all origins\n\n'
             '# After (RESTRICTED)\n'
             'CORS(app, origins=["https://yourdomain.com"])'
         ),

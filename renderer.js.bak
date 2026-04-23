@@ -16,7 +16,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     const loadProjects = async () => {
         const projects = await window.aegis.getProjects();
         const projectListDiv = document.getElementById('project-list');
-        projectListDiv.textContent = '';
+        projectListDiv.innerHTML = '';
         if (projects && !projects.error) {
             projects.forEach(project => {
                 const button = document.createElement('button');

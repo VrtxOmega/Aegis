@@ -76,11 +76,14 @@ def _sanitize_ai_output(text):
         sanitized = re.sub(pattern, replacement, sanitized)
     return sanitized
 
+import os
+
 # ═══════════════════════════════════════════════════
 # OLLAMA CONFIG + SECURITY GUARDS
 # ═══════════════════════════════════════════════════
-OLLAMA_URL = "http://127.0.0.1:11434"
-MODEL = "qwen3:8b"
+OLLAMA_URL = os.environ.get("OLLAMA_CLOUD_URL", "http://127.0.0.1:11434")
+MODEL = os.environ.get("OLLAMA_CLOUD_MODEL", "qwen3:8b")
+OLLAMA_API_KEY = os.environ.get("OLLAMA_CLOUD_KEY", "")
 TIMEOUT_SECONDS = 60
 MAX_RESPONSE_LEN = 8000  # Guard: cap response length
 KEEPALIVE_INTERVAL = 120  # seconds
@@ -104,7 +107,10 @@ _ollama_status = {
 def _check_ollama_health():
     """Health check — verify Ollama API is responding."""
     try:
-        resp = requests.get(f"{OLLAMA_URL}/api/version", timeout=3)
+        headers = {}
+        if OLLAMA_API_KEY:
+            headers["Authorization"] = f"Bearer {OLLAMA_API_KEY}"
+        resp = requests.get(f"{OLLAMA_URL}/api/version", headers=headers, timeout=3)
         if resp.status_code == 200:
             _ollama_status['healthy'] = True
             _ollama_status['error'] = None
@@ -215,9 +221,14 @@ def _ollama_generate(prompt, system=None, max_tokens=2000):
         if system:
             payload["system"] = system
 
+        headers = {}
+        if OLLAMA_API_KEY:
+            headers["Authorization"] = f"Bearer {OLLAMA_API_KEY}"
+
         resp = requests.post(
             f"{OLLAMA_URL}/api/generate",
             json=payload,
+            headers=headers,
             timeout=TIMEOUT_SECONDS
         )
 

@@ -974,7 +974,7 @@ def detect_postinstall_hooks():
                             ))
                     
                     # Flag obfuscation techniques (base64, hex, eval)
-                    if 'ast.literal_eval(' in cmd or 'buffer.from' in cmd or '\\x' in cmd or 'base64' in cmd:
+                    if 'eval(' in cmd or 'buffer.from' in cmd or '\\x' in cmd or 'base64' in cmd:
                         file_findings.append(_make_finding(
                             'PST-002', 'critical', 'supply_chain',
                             f"Obfuscated {hook} hook detected",
