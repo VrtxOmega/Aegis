@@ -1,0 +1,233 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Aegis ReWrite — Code Security Scanner</title>
+    <meta name="description" content="Aegis ReWrite: AI-powered code vulnerability scanner and one-click remediation engine.">
+    <link rel="stylesheet" href="style.css">
+    <!-- Prism.js syntax highlighting -->
+    <link rel="stylesheet" href="assets/prism-tomorrow.min.css">
+</head>
+<body>
+<div id="app">
+
+    <!-- ═══════════════════════════ TITLEBAR ═══════════════════════════ -->
+    <div id="titlebar" role="banner">
+        <span class="titlebar-logo" aria-hidden="true">⛨</span>
+        <span class="titlebar-title">Aegis ReWrite</span>
+        <span id="scan-badge" class="titlebar-badge" aria-live="polite">
+            <span class="titlebar-badge-dot" aria-hidden="true"></span>
+            <span id="badge-text">Scanning</span>
+        </span>
+        <div class="titlebar-spacer"></div>
+        <div class="title-actions">
+            <!-- Export findings -->
+            <button id="export-btn" class="title-action-btn" aria-label="Export findings" title="Export findings as JSON or CSV" disabled>
+                <span aria-hidden="true">↓</span> Export
+            </button>
+            <!-- Settings gear -->
+            <button id="settings-btn" class="title-action-btn" aria-label="Open settings" title="Settings">
+                <span aria-hidden="true">⚙</span>
+            </button>
+        </div>
+        <nav class="win-controls" aria-label="Window controls">
+            <button class="win-btn" id="btn-minimize" aria-label="Minimize window" title="Minimize">─</button>
+            <button class="win-btn" id="btn-maximize" aria-label="Maximize window" title="Maximize">□</button>
+            <button class="win-btn close" id="btn-close" aria-label="Close window" title="Close">✕</button>
+        </nav>
+    </div>
+
+    <!-- ════════════════════════════ TOOLBAR ═══════════════════════════ -->
+    <div id="toolbar" role="toolbar" aria-label="Scan controls">
+        <input
+            id="folder-path-input"
+            type="text"
+            placeholder="Select or drop a project folder…"
+            readonly
+            aria-label="Selected project folder path"
+            title="Project folder path"
+        >
+        <button id="browse-btn" class="toolbar-btn" aria-label="Browse for project folder">
+            <span aria-hidden="true">📁</span> Browse
+        </button>
+        <button id="scan-btn" class="toolbar-btn" aria-label="Start security scan" title="Scan the selected project for vulnerabilities">
+            <span aria-hidden="true">⛨</span> Scan
+        </button>
+    </div>
+
+    <!-- ══════════════════════════ SCAN PROGRESS ═══════════════════════ -->
+    <div id="scan-progress" role="status" aria-live="polite" aria-label="Scan progress">
+        <div class="progress-label">
+            <span id="progress-file">Initializing scan…</span>
+            <span id="progress-pct">0%</span>
+        </div>
+        <div class="progress-track" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+            <div class="progress-fill" id="progress-fill" style="width:0%"></div>
+        </div>
+    </div>
+
+    <!-- Findings content area -->
+    <div id="content-area">
+
+        <!-- ══════════════════════ FINDINGS PANEL ══════════════════════ -->
+        <div id="findings-panel" aria-label="Security findings">
+
+            <!-- Filter Bar -->
+            <div id="filter-bar" role="group" aria-label="Filter findings by severity">
+                <span id="scan-summary" aria-live="polite">No scan yet</span>
+                <button class="filter-btn active" data-sev="CRITICAL" aria-label="Filter CRITICAL findings" aria-pressed="true">
+                    CRITICAL <span id="count-critical">0</span>
+                </button>
+                <button class="filter-btn active" data-sev="HIGH" aria-label="Filter HIGH findings" aria-pressed="true">
+                    HIGH <span id="count-high">0</span>
+                </button>
+                <button class="filter-btn active" data-sev="MEDIUM" aria-label="Filter MEDIUM findings" aria-pressed="true">
+                    MED <span id="count-medium">0</span>
+                </button>
+                <button class="filter-btn active" data-sev="LOW" aria-label="Filter LOW findings" aria-pressed="true">
+                    LOW <span id="count-low">0</span>
+                </button>
+                <div class="filter-spacer"></div>
+                <select id="sort-select" class="sort-select" aria-label="Sort findings by">
+                    <option value="severity">By Severity</option>
+                    <option value="file">By File</option>
+                    <option value="category">By Category</option>
+                </select>
+            </div>
+
+            <!-- Findings List -->
+            <ul id="findings-list" role="list" aria-label="Security findings list" tabindex="0">
+                <li id="empty-state" role="listitem">
+                    <div style="display:contents">
+                        <div class="empty-icon" aria-hidden="true">⛨</div>
+                        <div class="empty-title">Nothing to scan yet</div>
+                        <div class="empty-body">
+                            Select a project folder and click <strong>Scan</strong> to detect security vulnerabilities.
+                        </div>
+                        <div class="empty-hint" aria-label="Tip: drag and drop a folder">
+                            <span aria-hidden="true">💡</span> Drag &amp; drop a folder to start
+                        </div>
+                    </div>
+                </li>
+            </ul>
+        </div>
+
+        <!-- ══════════════════════ RESIZE HANDLE ═══════════════════════ -->
+        <div id="resize-handle" role="separator" aria-orientation="vertical" title="Drag to resize panels" aria-label="Resize panels"></div>
+
+        <!-- ══════════════════════ DETAIL PANEL ════════════════════════ -->
+        <div id="detail-panel" aria-label="Finding details" aria-live="polite">
+            <div id="detail-empty">
+                <div class="de-icon" aria-hidden="true">⛨</div>
+                <span>Select a finding to inspect</span>
+            </div>
+            <div id="detail-scroll" style="display:none"></div>
+        </div>
+
+    </div><!-- /#content-area -->
+
+    <!-- ════════════════════════ BATCH FIX BAR ════════════════════════ -->
+    <div id="batch-bar" aria-live="assertive">
+        <span id="batch-count" class="batch-count" aria-label="Number of selected findings">0 selected</span>
+        <span id="batch-info" class="batch-info"></span>
+        <div id="batch-progress" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+            <div id="batch-progress-bar" style="width:0%"></div>
+        </div>
+        <button id="batch-preview-btn" class="action-btn" aria-label="Preview all selected fixes">
+            👁 Preview All Fixes
+        </button>
+        <button id="batch-fix-btn" class="action-btn primary" aria-label="Apply fixes to all selected findings">
+            ⚡ Fix All Selected
+        </button>
+        <button id="batch-clear-btn" class="action-btn" aria-label="Clear selection">Clear</button>
+    </div>
+
+    <!-- ════════════════════════ TOAST CONTAINER ═══════════════════════ -->
+    <div id="toast-container" aria-live="polite" aria-label="Notifications"></div>
+
+    <!-- ═══════════════════════ DRAG OVERLAY ══════════════════════════ -->
+    <div id="drag-overlay" aria-hidden="true">
+        <div class="drag-icon">📂</div>
+        <div>Drop project folder here</div>
+    </div>
+
+    <!-- ═══════════════════════ EXPORT MENU ═══════════════════════════ -->
+    <div id="export-menu" class="export-menu" role="menu" aria-label="Export options">
+        <div class="export-item" role="menuitem" data-fmt="json" tabindex="0">
+            <span aria-hidden="true">{ }</span> Export as JSON
+        </div>
+        <div class="export-item" role="menuitem" data-fmt="csv" tabindex="0">
+            <span aria-hidden="true">≡</span> Export as CSV
+        </div>
+    </div>
+
+    <!-- ═════════════════════ SETTINGS MODAL ══════════════════════════ -->
+    <div id="settings-modal" role="dialog" aria-modal="true" aria-labelledby="settings-title">
+        <div class="modal-card">
+            <div class="modal-header">
+                <span id="settings-title" class="modal-title">⚙ Settings</span>
+                <button id="settings-close" class="modal-close" aria-label="Close settings">✕</button>
+            </div>
+            <div class="modal-body">
+
+                <!-- Backup Chain Depth -->
+                <div class="setting-row">
+                    <label class="setting-label" for="backup-depth-slider">Backup Chain Depth</label>
+                    <div class="setting-description">Number of historical backups kept per file during fixes (1–10).</div>
+                    <div class="setting-control">
+                        <input
+                            type="range" id="backup-depth-slider" min="1" max="10" value="3"
+                            class="depth-slider" aria-label="Backup depth"
+                        >
+                        <span id="backup-depth-value" class="depth-value">3</span>
+                    </div>
+                </div>
+
+                <!-- Editor Preference -->
+                <div class="setting-row">
+                    <label class="setting-label" for="editor-pref-select">Open in Editor</label>
+                    <div class="setting-description">Which editor to launch when clicking a file path.</div>
+                    <div class="setting-control">
+                        <select id="editor-pref-select" class="editor-select" aria-label="Editor preference">
+                            <option value="vscode">VS Code</option>
+                            <option value="cursor">Cursor</option>
+                            <option value="none">None (copy path)</option>
+                        </select>
+                    </div>
+                </div>
+
+                <!-- AI Model Selection -->
+                <div class="setting-row">
+                    <div class="setting-label">AI Model</div>
+                    <div class="setting-description">Ollama model used for explanations and code rewrites.</div>
+                    <div class="setting-control model-selector">
+                        <div id="ai-status-dot" class="ai-status-dot offline" aria-label="Ollama status: offline"></div>
+                        <select id="model-select" class="model-select" aria-label="AI model selection">
+                            <option value="qwen3:8b">qwen3:8b</option>
+                            <option value="qwen2.5:7b">qwen2.5:7b</option>
+                            <option value="qwen2.5:0.5b">qwen2.5:0.5b</option>
+                            <option value="llama3.2:1b">llama3.2:1b</option>
+                        </select>
+                    </div>
+                </div>
+
+            </div>
+            <div class="modal-footer">
+                <button id="settings-cancel-btn" class="action-btn" aria-label="Cancel settings changes">Cancel</button>
+                <button id="settings-save-btn" class="action-btn primary" aria-label="Save settings">Save Settings</button>
+            </div>
+        </div>
+    </div>
+
+</div><!-- /#app -->
+
+<!-- Prism.js for syntax highlighting -->
+<script src="assets/prism.min.js"></script>
+<script src="assets/prism-python.min.js"></script>
+<script src="assets/prism-javascript.min.js"></script>
+<script src="assets/prism-yaml.min.js"></script>
+
+<script src="renderer.js"></script>
+</body>
+</html>
